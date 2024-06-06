@@ -1,0 +1,24 @@
+.ftpignore
+.ftpconfig
+.vscode
+
+# Byte-compiled / optimized / DLL files
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*$py.class
+*.swp
+
+/datasets
+/notebooks
+
+*.out
+
+/data
+/connectivity
+/logs
+/pics
+
+/datasets_tjark
+/preprocess/3D/matterport3d_mesh
+/preprocess/3D/*.json
