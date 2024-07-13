@@ -1,0 +1,834 @@
+from collections import defaultdict
+from collections import defaultdict
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+from transformers import BertPreTrainedModel
+
+from .vilmodel_goat import BertLayerNorm, BertOnlyMLMHead, GlocalTextPathCMT, BertPredictionHeadTransform
+from .ops import pad_tensors_wgrad, gen_seq_masks
+from data.common import check_gpu_mem_usedRate
+from optim.kd_loss import kd_loss, mse_loss, exponential_decay, invert_normalized_losses
+
+class RegionClassification(nn.Module):
+    " for MRC(-kl)"
+    def __init__(self, hidden_size, label_dim):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                 nn.ReLU(),
+                                 BertLayerNorm(hidden_size, eps=1e-12),
+                                 nn.Linear(hidden_size, label_dim))
+
+    def forward(self, input_):
+        output = self.net(input_)
+        return output
+
+class ClsPrediction(nn.Module):
+    def __init__(self, hidden_size, input_size=None):
+        super().__init__()
+        if input_size is None:
+            input_size = hidden_size
+        self.net = nn.Sequential(nn.Linear(input_size, hidden_size),
+                                 nn.ReLU(),
+                                 BertLayerNorm(hidden_size, eps=1e-12),
+                                 nn.Linear(hidden_size, 1))
+
+    def forward(self, x):
+        return self.net(x)
+
+class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.config = config
+        self.bert = GlocalTextPathCMT(config)
+
+        if 'mlm' in config.pretrain_tasks:
+            self.mlm_head = BertOnlyMLMHead(self.config)
+        if 'mrc' in config.pretrain_tasks:
+            self.image_classifier = RegionClassification(self.config.hidden_size, self.config.image_prob_size)
+            if self.config.obj_prob_size > 0 and self.config.obj_prob_size != self.config.image_prob_size:
+                self.obj_classifier = RegionClassification(self.config.hidden_size, self.config.obj_prob_size)
+            else:
+                self.obj_classifier = None
+        if 'sap' in config.pretrain_tasks:
+            self.global_sap_head = ClsPrediction(self.config.hidden_size)
+            self.local_sap_head = ClsPrediction(self.config.hidden_size)
+            if config.glocal_fuse:
+                self.sap_fuse_linear = ClsPrediction(self.config.hidden_size, input_size=self.config.hidden_size*2)
+            else:
+                self.sap_fuse_linear = None
+        if 'og' in config.pretrain_tasks:
+            self.og_head = ClsPrediction(self.config.hidden_size)
+        
+        if 'cfp' in config.pretrain_tasks:
+            self.tim_txt_head = BertPredictionHeadTransform(self.config)
+            self.tim_global_head = BertPredictionHeadTransform(self.config)
+            self.tim_local_head = BertPredictionHeadTransform(self.config)
+            self.tim_fused_head = BertPredictionHeadTransform(self.config)
+
+            # attention for last
+            self.tim_txt_attn = nn.Parameter(torch.Tensor(self.config.hidden_size,1))
+            self.tim_global_attn = nn.Parameter(torch.Tensor(self.config.hidden_size,1))
+            self.tim_local_attn = nn.Parameter(torch.Tensor(self.config.hidden_size,1))
+            self.tim_fused_attn = nn.Parameter(torch.Tensor(self.config.hidden_size,1))
+            nn.init.uniform_(self.tim_txt_attn, -0.1, 0.1)
+            nn.init.uniform_(self.tim_global_attn, -0.1, 0.1)
+            nn.init.uniform_(self.tim_local_attn, -0.1, 0.1)
+            nn.init.uniform_(self.tim_fused_attn, -0.1, 0.1)
+
+            self.temperature = self.config.cfp_temperature
+        
+        # adaptive meta-ability weights for KD
+        if self.bert.role == 'student':
+            if self.config.kdl.knowledge_distillation:
+                if self.config.kdl.kd_loss == 'mse':
+                    self.kdl_feat_loss = mse_loss
+                elif self.config.kdl.kd_loss == 'kl':
+                    self.kdl_feat_loss = kd_loss
+                
+                if self.config.kdl.kdl_attn_loss == 'mse':
+                    self.kdl_attn_loss = mse_loss
+                elif self.config.kdl.kdl_attn_loss == 'kl':
+                    self.kdl_attn_loss = kd_loss
+            
+            if self.config.kdl.teacher_sample_hard_mining:
+                if self.config.kdl.t_sample_preprocess == 'exp':
+                    self.t_sample_preprocess = exponential_decay
+                elif self.config.kdl.t_sample_preprocess == 'norm':
+                    self.t_sample_preprocess = invert_normalized_losses
+
+        self.init_weights()
+        self.tie_weights()
+
+    def tie_weights(self):
+        if 'mlm' in self.config.pretrain_tasks:
+            self._tie_or_clone_weights(self.mlm_head.predictions.decoder,
+                self.bert.embeddings.word_embeddings)
+
+    def forward(self, batch, task, compute_loss=True, teacher_outputs=None, t_sample_weights=None):
+        if self.config.empty_cache:
+            used, used_rate, total = check_gpu_mem_usedRate(self.config.cuda_first_device)
+            if used_rate > 0.9:
+                torch.cuda.empty_cache()
+        batch = defaultdict(lambda: None, batch)
+        if task.startswith('mlm'):
+            outputs = self.forward_mlm(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['txt_labels'], compute_loss,
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        elif task.startswith('mrc'):
+            outputs = self.forward_mrc(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['vp_view_mrc_masks'], batch['vp_view_probs'], 
+                batch['vp_obj_mrc_masks'], batch['vp_obj_probs'], compute_loss,
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        elif task.startswith('sap'):
+            outputs = self.forward_sap(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['gmap_visited_masks'],
+                batch['global_act_labels'], batch['local_act_labels'], compute_loss,
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        elif task.startswith('og'):
+            outputs = self.forward_og(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['obj_labels'], compute_loss,
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        elif task.startswith('valid_sap_og'):
+            outputs = self.forward_sap_og(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['gmap_visited_masks'], batch['global_act_labels'], batch['local_act_labels'], 
+                batch['obj_labels'],
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        elif task.startswith('cfp'):
+            outputs = self.forward_cfp(
+                batch['txt_ids'], batch['txt_lens'], batch['traj_view_img_fts'], 
+                batch['traj_obj_img_fts'], batch['traj_loc_fts'], batch['traj_nav_types'], 
+                batch['traj_step_lens'], batch['traj_vp_view_lens'], batch['traj_vp_obj_lens'], 
+                batch['traj_vpids'], batch['traj_cand_vpids'], 
+                batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
+                batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
+                batch['gmap_visited_masks'],
+                batch['global_act_labels'], batch['local_act_labels'], compute_loss,
+                batch['traj_reverie_loc_fts'], batch['extra_heads'], batch['traj_reverie_obj_names'],
+                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
+                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
+                batch['img_z_features'], batch['img_z_pzs']
+            )
+        else:
+            raise ValueError('invalid task')
+
+        if self.bert.role == 'student' and self.bert.kd and teacher_outputs is not None:
+            outputs, losses, loss_list = self.forward_kd_loss(task, outputs, teacher_outputs, t_sample_weights)
+            return outputs, losses, loss_list
+            
+        return outputs
+
+    def forward_mlm(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        txt_labels, compute_loss,
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None
+        ):
+        txt_embeds, kdl_txt_embeds, kdl_vp_txt_embeds, kdl_gmap_txt_embeds, kdl_fused_txt_embeds,\
+        kdl_fused_img_embeds, kdl_traj_fused_embeds, txt_attns, view_img_attns = self.bert.forward_mlm(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+
+        # only compute masked tokens for better efficiency
+        masked_output = self._compute_masked_hidden(txt_embeds, txt_labels != -1)
+        prediction_scores = self.mlm_head(masked_output)
+
+        mask_loss = F.cross_entropy(
+            prediction_scores, txt_labels[txt_labels != -1], reduction='none'
+        )
+
+        outputs = {
+            'txt_emb': kdl_txt_embeds,
+            'txt_attn': txt_attns,
+            'vp_txt_emb': kdl_vp_txt_embeds,
+            'gmap_txt_emb': kdl_gmap_txt_embeds,
+            'fused_txt_emb': kdl_fused_txt_embeds,
+            'img_emb': kdl_fused_img_embeds,
+            'avg_img_emb': kdl_traj_fused_embeds,
+            'img_attn': view_img_attns,
+            'predict': prediction_scores,
+            'loss': mask_loss,
+            'label': txt_labels[txt_labels != -1]
+        }
+
+        return outputs
+
+    def _compute_masked_hidden(self, hidden, mask):
+        '''get only the masked region (don't compute unnecessary hiddens)'''
+        mask = mask.unsqueeze(-1).expand_as(hidden)
+        hidden_masked = hidden[mask].contiguous().view(-1, hidden.size(-1))
+        return hidden_masked
+
+    def forward_mrc(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        vp_view_mrc_masks, vp_view_probs, vp_obj_mrc_masks, vp_obj_probs, compute_loss=True,
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None
+        ):
+        _, vp_embeds = self.bert(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            return_gmap_embeds=False,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+        
+        vp_view_lens = [x[-1] for x in torch.split(traj_vp_view_lens, traj_step_lens)]
+        vp_view_embeds = pad_tensors_wgrad(
+            [x[1:view_len+1] for x, view_len in zip(vp_embeds, vp_view_lens)]
+        )   # [stop] at 0
+        # vp_view_mrc_masks = vp_view_mrc_masks[:, :vp_view_embeds.size(1)]
+        
+        # only compute masked regions for better efficient=cy
+        view_masked_output = self._compute_masked_hidden(vp_view_embeds, vp_view_mrc_masks)
+        view_prediction_soft_labels = self.image_classifier(view_masked_output)
+        view_mrc_targets = self._compute_masked_hidden(vp_view_probs, vp_view_mrc_masks)
+
+        if traj_obj_img_fts is not None:
+            vp_obj_lens = [x[-1] for x in torch.split(traj_vp_obj_lens, traj_step_lens)]
+            vp_obj_embeds = pad_tensors_wgrad(
+                [x[view_len+1:view_len+obj_len+1] for x, view_len, obj_len in zip(vp_embeds, vp_view_lens, vp_obj_lens)]
+            )
+            # vp_obj_mrc_masks = vp_obj_mrc_masks[:, :vp_obj_embeds.size(1)]
+            obj_masked_output = self._compute_masked_hidden(vp_obj_embeds, vp_obj_mrc_masks)
+            if self.obj_classifier is None:
+                obj_prediction_soft_labels = self.image_classifier(obj_masked_output)
+            else:
+                obj_prediction_soft_labels = self.obj_classifier(obj_masked_output)
+            obj_mrc_targets = self._compute_masked_hidden(vp_obj_probs, vp_obj_mrc_masks)
+        else:
+            obj_prediction_soft_labels, obj_mrc_targets = None, None
+
+        if compute_loss:
+            view_prediction_soft_labels = F.log_softmax(view_prediction_soft_labels, dim=-1)
+            view_mrc_loss = F.kl_div(view_prediction_soft_labels, view_mrc_targets, reduction='none').sum(dim=1)
+            if obj_prediction_soft_labels is None:
+                mrc_loss = view_mrc_loss
+            else:
+                obj_prediction_soft_labels = F.log_softmax(obj_prediction_soft_labels, dim=-1)
+                obj_mrc_loss = F.kl_div(obj_prediction_soft_labels, obj_mrc_targets, reduction='none').sum(dim=1)
+                mrc_loss = torch.cat([view_mrc_loss, obj_mrc_loss], 0)
+            return mrc_loss
+        else:
+            return view_prediction_soft_labels, view_mrc_targets, obj_prediction_soft_labels, obj_mrc_targets
+
+    def forward_sap(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        gmap_visited_masks, global_act_labels, local_act_labels, compute_loss,
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None
+        ):
+        batch_size = txt_ids.size(0)
+
+        gmap_embeds, vp_embeds, txt_embeds,\
+        kdl_txt_embeds, \
+        kdl_fused_img_embeds, kdl_traj_fused_embeds,\
+        kdl_vp_embeds, kdl_gmap_embeds,\
+        txt_attns, view_img_attns, vp_attns, gmap_attns = self.bert(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+        
+        if self.sap_fuse_linear is None:
+            fuse_weights = 0.5
+        else:
+            fuse_weights = torch.sigmoid(self.sap_fuse_linear(
+                torch.cat([gmap_embeds[:, 0], vp_embeds[:, 0]], 1)
+            ))
+
+        global_logits = self.global_sap_head(gmap_embeds).squeeze(2) * fuse_weights
+        global_logits.masked_fill_(gmap_visited_masks, -float('inf'))
+        global_logits.masked_fill_(gen_seq_masks(gmap_lens).logical_not(), -float('inf'))
+
+        local_logits = self.local_sap_head(vp_embeds).squeeze(2) * (1 - fuse_weights)
+        vp_nav_masks = pad_tensors_wgrad(
+            [x[-1]!=1 for x in torch.split(traj_nav_types, traj_step_lens)]
+        )[:, :local_logits.size(1)-1]
+        vp_nav_masks = torch.cat(
+            [torch.zeros(len(vp_nav_masks), 1).bool().to(vp_nav_masks.device), vp_nav_masks], 1
+        )   # add [stop]
+        local_logits.masked_fill_(vp_nav_masks, -float('inf'))
+
+        # fusion
+        fused_logits = torch.clone(global_logits)
+        fused_logits[:, 0] += local_logits[:, 0]   # stop
+        for i in range(batch_size):
+            visited_nodes = set([vp for vp, mask in zip(gmap_vpids[i], gmap_visited_masks[i]) if mask])
+            tmp = {}
+            bw_logits = 0
+            for j, cand_vpid in enumerate(traj_cand_vpids[i][-1]):
+                if cand_vpid in visited_nodes:
+                    bw_logits += local_logits[i, j+1]
+                else:
+                    tmp[cand_vpid] = local_logits[i, j+1]
+            for j, vp in enumerate(gmap_vpids[i]):
+                if j > 0 and vp not in visited_nodes:
+                    if vp in tmp:
+                        fused_logits[i, j] += tmp[vp]
+                    else:
+                        fused_logits[i, j] += bw_logits
+
+        global_losses = F.cross_entropy(global_logits, global_act_labels, reduction='none')
+        local_losses = F.cross_entropy(local_logits, local_act_labels, reduction='none')
+        fused_losses = F.cross_entropy(fused_logits, global_act_labels, reduction='none')
+        losses = global_losses + local_losses + fused_losses
+
+        outputs = {
+            'txt_emb': kdl_txt_embeds,
+            'txt_attn': txt_attns,
+            'img_emb': kdl_fused_img_embeds,
+            'avg_img_emb': kdl_traj_fused_embeds,
+            'img_attn': view_img_attns,
+            'local_emb': kdl_vp_embeds,
+            'global_emb': kdl_gmap_embeds,
+            'local_attn': vp_attns,
+            'global_attn': gmap_attns,
+            'predict': fused_logits,
+            'global_logits': global_logits,
+            'local_logits': local_logits,
+            'fused_logits': fused_logits,
+            'global_act_labels': global_act_labels,
+            'local_act_labels': local_act_labels,
+            'loss': losses,
+            'label': global_act_labels,
+        }
+
+        return outputs
+
+    def forward_og(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        obj_labels, compute_loss,
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None
+    ):
+        gmap_embeds, vp_embeds, txt_embeds,\
+        kdl_txt_embeds, \
+        kdl_fused_img_embeds, kdl_traj_fused_embeds,\
+        kdl_vp_embeds, kdl_gmap_embeds,\
+        txt_attns, view_img_attns, vp_attns, gmap_attns = self.bert.forward(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            return_gmap_embeds=False,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+
+        vp_view_lens = [x[-1] for x in torch.split(traj_vp_view_lens, traj_step_lens, 0)]
+        vp_obj_lens = [x[-1] for x in torch.split(traj_vp_obj_lens, traj_step_lens, 0)]
+        obj_embeds = pad_tensors_wgrad([
+            x[1+view_len: 1+view_len+obj_len] for x, view_len, obj_len in zip(vp_embeds, vp_view_lens, vp_obj_lens)
+        ])
+        obj_masks = gen_seq_masks(torch.stack(vp_obj_lens, 0))
+
+        obj_logits = self.og_head(obj_embeds).squeeze(2)
+        obj_logits.masked_fill_(obj_masks.logical_not(), -float('inf'))
+
+        losses = F.cross_entropy(obj_logits, obj_labels, reduction='none')
+
+        outputs = {
+            'txt_emb': kdl_txt_embeds,
+            'txt_attn': txt_attns,
+            'img_emb': kdl_fused_img_embeds,
+            'avg_img_emb': kdl_traj_fused_embeds,
+            'img_attn': view_img_attns,
+            'local_emb': kdl_vp_embeds,
+            'global_emb': kdl_gmap_embeds,
+            'local_attn': vp_attns,
+            'global_attn': gmap_attns,
+            'predict': obj_logits,
+            'loss': losses,
+            'label': obj_labels
+        }
+
+        return outputs
+
+    def forward_sap_og(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        gmap_visited_masks,
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None
+        ):
+        batch_size = txt_ids.size(0)
+
+        gmap_embeds, vp_embeds = self.bert(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+        
+        if self.sap_fuse_linear is None:
+            fuse_weights = 0.5
+        else:
+            fuse_weights = torch.sigmoid(self.sap_fuse_linear(
+                torch.cat([gmap_embeds[:, 0], vp_embeds[:, 0]], 1)
+            ))
+
+        global_logits = self.global_sap_head(gmap_embeds).squeeze(2) * fuse_weights
+        global_logits.masked_fill_(gmap_visited_masks, -float('inf'))
+        global_logits.masked_fill_(gen_seq_masks(gmap_lens).logical_not(), -float('inf'))
+
+        local_logits = self.local_sap_head(vp_embeds).squeeze(2) * (1 - fuse_weights)
+        vp_nav_masks = pad_tensors_wgrad(
+            [x[-1]!=1 for x in torch.split(traj_nav_types, traj_step_lens)]
+        )[:, :local_logits.size(1)-1]
+        vp_nav_masks = torch.cat(
+            [torch.zeros(len(vp_nav_masks), 1).bool().to(vp_nav_masks.device), vp_nav_masks], 1
+        )   # add [stop]
+        local_logits.masked_fill_(vp_nav_masks, -float('inf'))
+
+        # fusion
+        fused_logits = torch.clone(global_logits)
+        fused_logits[:, 0] += local_logits[:, 0]   # stop
+        for i in range(batch_size):
+            visited_nodes = set([vp for vp, mask in zip(gmap_vpids[i], gmap_visited_masks[i]) if mask])
+            tmp = {}
+            bw_logits = 0
+            for j, cand_vpid in enumerate(traj_cand_vpids[i][-1]):
+                if cand_vpid in visited_nodes:
+                    bw_logits += local_logits[i, j+1]
+                else:
+                    tmp[cand_vpid] = local_logits[i, j+1]
+            for j, vp in enumerate(gmap_vpids[i]):
+                if j > 0 and vp not in visited_nodes:
+                    if vp in tmp:
+                        fused_logits[i, j] += tmp[vp]
+                    else:
+                        fused_logits[i, j] += bw_logits
+
+        vp_view_lens = [x[-1] for x in torch.split(traj_vp_view_lens, traj_step_lens, 0)]
+        vp_obj_lens = [x[-1] for x in torch.split(traj_vp_obj_lens, traj_step_lens, 0)]
+        obj_embeds = pad_tensors_wgrad([
+            x[1+view_len: 1+view_len+obj_len] for x, view_len, obj_len in zip(vp_embeds, vp_view_lens, vp_obj_lens)
+        ])
+        obj_masks = gen_seq_masks(torch.stack(vp_obj_lens, 0))
+
+        obj_logits = self.og_head(obj_embeds).squeeze(2)
+        obj_logits.masked_fill_(obj_masks.logical_not(), -float('inf'))
+        
+        return global_logits, local_logits, fused_logits, obj_logits
+
+    ''' Contrastive Trajectory-and-Instruction Matching '''
+    def forward_cfp(
+        self, txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+        traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+        gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+        gmap_visited_masks, global_act_labels, local_act_labels, compute_loss,
+        traj_reverie_loc_fts=None, extra_heads=False,traj_reverie_obj_names=None,
+        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
+        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        img_z_fts=None, img_z_pzs=None, teacher_outputs=None
+    ):
+        batch_size = txt_ids.size(0)
+
+        gmap_embeds, vp_embeds, txt_embeds,\
+        kdl_txt_embeds, \
+        kdl_fused_img_embeds, kdl_traj_fused_embeds,\
+        kdl_vp_embeds, kdl_gmap_embeds,\
+        txt_attns, view_img_attns, vp_attns, gmap_attns = self.bert.forward_cfp(
+            txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
+            traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
+            gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
+            traj_reverie_loc_fts=traj_reverie_loc_fts,
+            return_txt_embeds=True,traj_reverie_obj_names=traj_reverie_obj_names,
+            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
+            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
+            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+        )
+
+        if extra_heads:
+            gmap_embeds = self.tim_global_head(gmap_embeds)
+            vp_embeds = self.tim_local_head(vp_embeds)
+            txt_embeds = self.tim_txt_head(txt_embeds)
+        
+        if self.sap_fuse_linear is None:
+            fuse_weights = 0.5
+        else:
+            fuse_weights = torch.sigmoid(self.sap_fuse_linear(
+                torch.cat([gmap_embeds[:, 0], vp_embeds[:, 0]], 1)
+            ))
+        
+        ''' Use attention to flatten features'''
+        M1 = torch.tanh(gmap_embeds)
+        a1 = torch.softmax(torch.matmul(M1,self.tim_global_attn),1) # [bs,max_len,1]
+        out1 = torch.sum(gmap_embeds * a1,1) # [bs,hd]
+        gmap_outputs = torch.tanh(out1) # [bs,hd]
+
+        M2 = torch.tanh(vp_embeds)
+        a2 = torch.softmax(torch.matmul(M2,self.tim_local_attn),1) # [bs,max_len,1]
+        out2 = torch.sum(vp_embeds * a2,1) # [bs,hd]
+        vp_outputs = torch.tanh(out2) # [bs,hd]
+
+        M3 = torch.tanh(txt_embeds)
+        a3 = torch.softmax(torch.matmul(M3,self.tim_txt_attn),1) # [bs,max_len,1]
+        out3 = torch.sum(txt_embeds * a3,1) # [bs,hd]
+        txt_outputs = torch.tanh(out3) # [bs,hd]
+
+        fused_outputs = gmap_outputs * fuse_weights + vp_outputs * (1-fuse_weights)
+ 
+        target_sim = torch.arange(batch_size).to(self.device)
+
+        gmap_txt_sim = ( gmap_outputs @ txt_outputs.T ) / self.temperature
+        global_txt_losses = (F.cross_entropy(gmap_txt_sim, target_sim, reduction='none') +\
+                                F.cross_entropy(gmap_txt_sim.T, target_sim.T, reduction='none')) / 2.0
+
+        vp_txt_sim = ( vp_outputs @ txt_outputs.T ) / self.temperature
+        vp_txt_losses = (F.cross_entropy(vp_txt_sim, target_sim, reduction='none') +\
+                                F.cross_entropy(vp_txt_sim.T, target_sim.T, reduction='none')) / 2.0
+        
+        fused_txt_sim = ( fused_outputs @ txt_outputs.T) / self.temperature
+        fused_txt_losses = (F.cross_entropy(fused_txt_sim, target_sim, reduction='none') +\
+                                F.cross_entropy(fused_txt_sim.T, target_sim.T, reduction='none')) / 2.0
+
+        losses = global_txt_losses + vp_txt_losses + fused_txt_losses
+
+        outputs = {
+            'txt_emb': kdl_txt_embeds,
+            'txt_attn': txt_attns,
+            'img_emb': kdl_fused_img_embeds,
+            'avg_img_emb': kdl_traj_fused_embeds,
+            'img_attn': view_img_attns,
+            'local_emb': kdl_vp_embeds,
+            'global_emb': kdl_gmap_embeds,
+            'local_attn': vp_attns,
+            'global_attn': gmap_attns,
+            'gmap_outputs': gmap_outputs,
+            'vp_outputs': vp_outputs,
+            'fused_outputs': fused_outputs,
+            'txt_outputs': txt_outputs,
+            'loss': losses,
+            'label': target_sim
+        }
+
+        return outputs
+
+    def forward_kd_loss(self, task, s_outputs, t_outputs, t_sample_weights, last_t_losses=None):
+        # kdl loss
+        if t_sample_weights is not None:
+            t_sample_weights = self.t_sample_preprocess(t_sample_weights, decay_rate=self.config.kdl.t_sample_preprocess_exp_decay)
+        loss_record_list = {}
+        kdl_txt_loss, kdl_img_loss, kdl_local_loss, kdl_global_loss, kdl_predict_loss = 0, 0, 0, 0, 0
+        # 1. for txt
+        if 'txt' in self.config.kdl.kdl_tasks:
+            # 1.1 for txt_emb
+            if 'emb' in self.config.kdl.kdl_task_types: 
+                kdl_txt_emb_loss = self.kdl_feat_loss(
+                    s_outputs['txt_emb'],
+                    t_outputs['txt_emb'],
+                    temperature=self.config.kdl.kd_temperature,
+                    t_sample_weights=t_sample_weights
+                )
+                if task == 'mlm':
+                    kdl_vp_txt_emb_loss = self.kdl_feat_loss(
+                        s_outputs['vp_txt_emb'],
+                        t_outputs['vp_txt_emb'],
+                        temperature=self.config.kdl.kd_temperature,
+                        t_sample_weights=t_sample_weights
+                    )
+                    kdl_gmap_txt_emb_loss = self.kdl_feat_loss(
+                        s_outputs['gmap_txt_emb'],
+                        t_outputs['gmap_txt_emb'],
+                        temperature=self.config.kdl.kd_temperature,
+                        t_sample_weights=t_sample_weights
+                    )
+                    kdl_fused_txt_emb_loss = self.kdl_feat_loss(
+                        s_outputs['fused_txt_emb'],
+                        t_outputs['fused_txt_emb'],
+                        temperature=self.config.kdl.kd_temperature,
+                        t_sample_weights=t_sample_weights
+                    )
+                    kdl_txt_loss = (kdl_txt_emb_loss + kdl_vp_txt_emb_loss + kdl_gmap_txt_emb_loss + kdl_fused_txt_emb_loss)/4
+                else:
+                    kdl_txt_loss = kdl_txt_emb_loss
+        
+            # 1.2 for txt_attn
+            if 'attn' in self.config.kdl.kdl_task_types:
+                kdl_txt_attn_loss = self.kdl_attn_loss(
+                    s_outputs['txt_attn'],
+                    t_outputs['txt_attn'][:,:s_outputs['txt_attn'].shape[1],:,:],
+                    temperature=self.config.kdl.kd_temperature,
+                    is_attn=False,
+                    t_sample_weights=t_sample_weights
+                ) 
+                kdl_txt_loss = kdl_txt_loss + kdl_txt_attn_loss
+        
+            loss_record_list['txt'] = kdl_txt_loss.cpu().detach().numpy().item()
+        
+        # 2. for Img
+        if 'img' in self.config.kdl.kdl_tasks:
+            # 2.1 for img_emb
+            # Note that since the first dimension in the pano_imgs includes several multiple nodes. So it is different to batch_size. Ignore the teacher_sample_weight.
+            if 'emb' in self.config.kdl.kdl_task_types:
+                kdl_img_emb_loss = self.kdl_feat_loss(
+                    s_outputs['img_emb'],
+                    t_outputs['img_emb'],
+                    temperature=self.config.kdl.kd_temperature
+                )
+                kdl_avg_img_emb_loss = self.kdl_feat_loss(
+                    s_outputs['avg_img_emb'],
+                    t_outputs['avg_img_emb'],
+                    temperature=self.config.kdl.kd_temperature
+                )
+                kdl_img_loss = (kdl_img_emb_loss + kdl_avg_img_emb_loss)/2
+            if 'attn' in self.config.kdl.kdl_task_types:
+                kdl_img_attn_loss = self.kdl_attn_loss(
+                    s_outputs['img_attn'],
+                    t_outputs['img_attn'],
+                    temperature=self.config.kdl.kd_temperature,
+                    is_attn=False
+                )
+                kdl_img_loss = kdl_img_loss + kdl_img_attn_loss
+
+            loss_record_list['img'] = kdl_img_loss.cpu().detach().numpy().item()
+        
+        # 3. for Local
+        if 'local' in self.config.kdl.kdl_tasks:
+            if 'emb' in self.config.kdl.kdl_task_types and 'local_emb' in s_outputs.keys():
+                kdl_local_emb_loss = self.kdl_feat_loss(
+                    s_outputs['local_emb'],
+                    t_outputs['local_emb'],
+                    temperature=self.config.kdl.kd_temperature,
+                    t_sample_weights=t_sample_weights
+                )
+                kdl_local_loss = kdl_local_emb_loss
+            if 'attn' in self.config.kdl.kdl_task_types and 'local_attn' in s_outputs.keys():
+                kdl_local_attn_loss = self.kdl_attn_loss(
+                    s_outputs['local_attn'],
+                    t_outputs['local_attn'][:,:s_outputs['local_attn'].shape[1],:,:],
+                    temperature=self.config.kdl.kd_temperature,
+                    is_attn=False,
+                    t_sample_weights=t_sample_weights
+                )
+                kdl_local_loss = kdl_local_loss + kdl_local_attn_loss
+            if isinstance(kdl_local_loss, int):
+                loss_record_list['local'] = kdl_local_loss
+            else:
+                loss_record_list['local'] = kdl_local_loss.cpu().detach().numpy().item()
+        
+        # 4. for global
+        if 'global' in self.config.kdl.kdl_tasks:
+            if 'emb' in self.config.kdl.kdl_task_types and 'global_emb' in s_outputs.keys():
+                kdl_global_emb_loss = self.kdl_feat_loss(
+                    s_outputs['global_emb'],
+                    t_outputs['global_emb'],
+                    temperature=self.config.kdl.kd_temperature,
+                    t_sample_weights=t_sample_weights
+                )
+                kdl_global_loss = kdl_global_emb_loss
+            if 'attn' in self.config.kdl.kdl_task_types and 'global_attn' in s_outputs.keys():
+                kdl_global_attn_loss = self.kdl_attn_loss(
+                    s_outputs['global_attn'],
+                    t_outputs['global_attn'][:,:s_outputs['global_attn'].shape[1],:,:],
+                    temperature=self.config.kdl.kd_temperature,
+                    is_attn=False,
+                    t_sample_weights=t_sample_weights
+                )
+                kdl_global_loss = kdl_global_loss + kdl_global_attn_loss 
+            if isinstance(kdl_global_loss, int):
+                loss_record_list['global'] = kdl_global_loss
+            else:
+                loss_record_list['global'] = kdl_global_loss.cpu().detach().numpy().item()
+        
+        # 5. for Predict
+        if 'predict' in self.config.kdl.kdl_tasks and 'predict' in s_outputs.keys():
+            if self.config.kdl.kdl_logits_loss == 'kd':
+                kdl_predict_loss = kd_loss(
+                    s_outputs['predict'],
+                    t_outputs['predict'],
+                    temperature=self.config.kdl.kd_temperature,
+                    t_sample_weights=t_sample_weights
+                )
+
+            loss_record_list['predict'] = kdl_predict_loss.cpu().detach().numpy().item()
+            
+        if not self.config.kdl.kdl_adaptive_ability_weight:
+            kdl_total_loss = kdl_txt_loss + kdl_img_loss + kdl_local_loss + kdl_global_loss + kdl_predict_loss 
+        else:
+            if self.config.kdl.kdl_adaptive_ability_weight_type == 'learn_weight':
+                # type-1: directly use learnable weights to join in optimization (not good)
+                kdl_total_loss = F.softplus(self.bert.kdl_txt_weight) * kdl_txt_loss +\
+                                F.softplus(self.bert.kdl_img_weight) * kdl_img_loss +\
+                                F.softplus(self.bert.kdl_local_weight) * kdl_local_loss +\
+                                F.softplus(self.bert.kdl_global_weight) * kdl_global_loss +\
+                                F.softplus(self.bert.kdl_predict_weight) * kdl_predict_loss 
+                    
+                loss_record_list['kdl_loss_adaptive_weight_txt'] = F.softplus(self.bert.kdl_txt_weight).cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_img'] = F.softplus(self.bert.kdl_img_weight).cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_local'] = F.softplus(self.bert.kdl_local_weight).cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_global'] = F.softplus(self.bert.kdl_global_weight).cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_predict'] = F.softplus(self.bert.kdl_predict_weight).cpu().detach().numpy().item()
+            
+            elif self.config.kdl.kdl_adaptive_ability_weight_type == 'DWA':
+                # type-2: dynamic weight average from paper "End-to-End Multi-Task Learning with Attention"
+                # TODO: not debug yet.
+                t_losses = []
+                t_losses.append(kdl_txt_loss.detach() / last_t_losses['kdl_txt_loss'])
+                t_losses.append(kdl_img_loss.detach() / last_t_losses['kdl_img_loss'])
+                t_losses.append(kdl_local_loss.detach() / last_t_losses['kdl_local_loss'])
+                t_losses.append(kdl_global_loss.detach() / last_t_losses['kdl_global_loss'])
+                t_losses.append(kdl_predict_loss.detach() / last_t_losses['kdl_predict_loss'])
+                weights = torch.softmax(torch.from_numpy(np.array(t_losses)) / self.config.dwa_t, dim=1).to(self.device)
+                
+                kdl_total_loss = weights[0] * kdl_txt_loss +\
+                    weights[1] * kdl_img_loss +\
+                    weights[2] * kdl_local_loss +\
+                    weights[3] * kdl_global_loss +\
+                    weights[4] * kdl_predict_loss 
+                
+                loss_record_list['kdl_loss_adaptive_weight_txt'] = weights[0].cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_img'] = weights[1].cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_local'] = weights[2].cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_global'] = weights[3].cpu().detach().numpy().item()
+                loss_record_list['kdl_loss_adaptive_weight_predict'] = weights[4].cpu().detach().numpy().item()
+                
+                del weights
+        
+            elif self.config.kdl.kdl_adaptive_ability_weight_type == 'RW':
+                # type-3: random weight from paper "Reasonable Effectiveness of Random Weighting: A Litmus Test for Multi-Task Learning"
+                weights = torch.randn(5).to(self.device) # standard normalized distribution
+                softmax_weights = F.softmax(weights/self.config.kdl.rw_temp, dim=0)*5
+                kdl_total_loss = softmax_weights[0] * kdl_txt_loss +\
+                    softmax_weights[1] * kdl_img_loss +\
+                    softmax_weights[2] * kdl_local_loss +\
+                    softmax_weights[3] * kdl_global_loss +\
+                    softmax_weights[4] * kdl_predict_loss 
+                
+                del weights, softmax_weights
+        
+        loss_record_list['kdl_loss'] = kdl_total_loss.cpu().detach().numpy().item()
+        
+        return s_outputs, kdl_total_loss, loss_record_list

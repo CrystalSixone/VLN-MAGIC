@@ -401,7 +401,126 @@ def main(opts):
     optimizer.step()
     max_unseen_facc = 0
     max_unseen_iter = 0
-    
+
+    for step, (name, batch) in enumerate(meta_loader):
+        # forward pass
+        n_examples[name] += batch['txt_ids'].size(0)
+        n_in_units[name] += batch['txt_lens'].sum().item()
+        task = name.split('_')[0]
+
+        if opts.fp16:
+            with amp.autocast():
+                loss = student_model(batch, task=task, compute_loss=True)
+        else:
+            if not kdl_cfg.knowledge_distillation:
+                s_outputs = student_model(batch, task=task, compute_loss=True)
+            else:
+                t_outputs = None
+                with torch.no_grad():
+                    t_outputs = teacher_model(batch, task=task, compute_loss=True) # txt_emb, img_attn, local_cross_attn, global_cross_attn, predict
+                    t_sample_weights = None
+                    if kdl_cfg.teacher_sample_hard_mining:
+                        t_sample_weights = t_outputs['loss'] # Use teacher's loss to adaptively adjust weights for KD.
+                    
+                s_outputs, kdl_total_loss, loss_list = student_model(batch, task=task, compute_loss=True, teacher_outputs=t_outputs, t_sample_weights=t_sample_weights) # compute the loss inner the forward loop (for adaptive weights)
+
+                for k,v in loss_list.items():
+                    task2loss[name][k](v)
+                    
+            # supervised loss
+            loss = s_outputs['loss']
+
+        n_loss_units[name] += loss.size(0)
+        loss = loss.mean()  # loss is not normalized in model
+
+        if kdl_cfg.knowledge_distillation:
+            total_loss = kdl_cfg.kd_alpha * kdl_total_loss + (1 - kdl_cfg.kd_alpha) * loss
+        else:
+            total_loss = loss
+
+        # backward pass
+        if args.gradient_accumulation_steps > 1: # average loss 
+            total_loss = total_loss / args.gradient_accumulation_steps
+
+        delay_unscale = (step+1) % opts.gradient_accumulation_steps != 0
+        if opts.fp16:
+            grad_scaler.scale(total_loss).backward()
+        else:
+            total_loss.backward()
+
+        task2loss[name]['supervised_loss'](loss.cpu().detach().numpy().item())
+        task2loss[name]['total_loss'](total_loss.cpu().detach().numpy().item())
+
+        # optimizer update and logging
+        if (step + 1) % opts.gradient_accumulation_steps == 0:
+            global_step += 1
+
+            # learning rate scheduling
+            lr_this_step = get_lr_sched(global_step, opts)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr_this_step
+            TB_LOGGER.add_scalar('lr', lr_this_step, global_step)
+
+            # log loss
+            # NOTE: not gathered across GPUs for efficiency
+            TB_LOGGER.log_scalar_dict({ll.name: ll.val
+                                        for item in task2loss.values()
+                                       for ll in item.values()
+                                       if ll.val is not None})
+            TB_LOGGER.step()
+
+            # update model params
+            if opts.grad_norm != -1:
+                if opts.fp16:
+                    grad_scaler.unscale_(optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    student_model.parameters(), opts.grad_norm
+                )
+
+                TB_LOGGER.add_scalar('grad_norm', grad_norm, global_step)
+            if opts.fp16:
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+            pbar.update(1)
+
+            if global_step % opts.log_steps == 0:
+                # monitor training throughput
+                LOGGER.info(f'==============Step {global_step}===============')
+                for t in train_dataloaders.keys():
+                    tot_ex = n_examples[t]
+                    ex_per_sec = int(tot_ex / (time.time() - start_time))
+                    tot_in = n_in_units[t]
+                    in_per_sec = int(tot_in / (time.time() - start_time))
+                    tot_l = n_loss_units[t]
+                    l_per_sec = int(tot_l / (time.time() - start_time))
+                    LOGGER.info(f'{t}: {tot_ex} examples trained at '
+                                f'{ex_per_sec} ex/s')
+                    TB_LOGGER.add_scalar(f'perf/{t}_ex_per_s', ex_per_sec,
+                                         global_step)
+                    TB_LOGGER.add_scalar(f'perf/{t}_in_per_s', in_per_sec,
+                                         global_step)
+                    TB_LOGGER.add_scalar(f'perf/{t}_loss_per_s', l_per_sec,
+                                         global_step)
+                LOGGER.info('===============================================')
+
+            if global_step % opts.valid_steps == 0:
+                max_update_flag = False
+                LOGGER.info(f'------Step {global_step}: start validation seen------')
+                validate(student_model, val_dataloaders, setname='_seen', tem=model_config.cfp_temperature)
+                LOGGER.info(f'------Step {global_step}: start validation unseen------')
+                max_unseen_facc, max_update_flag=validate(student_model, val2_dataloaders, setname='_unseen',max_metrix=max_unseen_facc,\
+                                                          tem=model_config.cfp_temperature)                               
+                # model_saver.save(model, global_step)
+                if max_update_flag:
+                    max_unseen_iter = global_step
+                    model_saver.save_latest(student_model, global_step, is_max=True)
+                LOGGER.info(f'Bert iter: {max_unseen_iter}. Best unseen facc: {max_unseen_facc}.')
+                model_saver.save_latest(student_model, global_step)
+        if global_step >= opts.num_train_steps:
+            break    
     if global_step % opts.valid_steps != 0:
         LOGGER.info(f'------Step {global_step}: start validation seen------')
         validate(student_model, val_dataloaders, setname='_seen', tem=model_config.cfp_temperature)
