@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_b_valid
+name=20260508_rxr_magic_m_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -11,11 +11,11 @@ seed=0
 
 outdir=${DATA_ROOT}/RxR/
 
-student_model_type=magic_s
-teacher_model_type=magic_m
-student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/ckpts/best_val_unseen.pt
-student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/backdoor/backdoor_update_features.tsv
-student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/frontdoor/frontdoor_update_features.tsv
+student_model_type=magic_m
+teacher_model_type=magic_b
+student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_M/ckpts/best_val_unseen.pt
+student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_M/logs/backdoor/backdoor_update_features.tsv
+student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_M/logs/frontdoor/frontdoor_update_features.tsv
 
 flag="--root_dir ${DATA_ROOT}
       --dataset rxr
@@ -77,5 +77,5 @@ flag="--root_dir ${DATA_ROOT}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='3' python r2r/main_nav.py $flag \
       --submit

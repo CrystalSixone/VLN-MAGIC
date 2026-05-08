@@ -18,3 +18,4 @@ tqdm==4.65.2
 transformers==4.34.1
 msgpack
 msgpack_numpy
+huggingface-hub==0.16.4

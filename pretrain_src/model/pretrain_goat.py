@@ -124,10 +124,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['txt_labels'], compute_loss,
-                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names']
             )
         elif task.startswith('mrc'):
             outputs = self.forward_mrc(
@@ -139,10 +136,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['vp_view_mrc_masks'], batch['vp_view_probs'], 
                 batch['vp_obj_mrc_masks'], batch['vp_obj_probs'], compute_loss,
-                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names']
             )
         elif task.startswith('sap'):
             outputs = self.forward_sap(
@@ -154,10 +148,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['gmap_visited_masks'],
                 batch['global_act_labels'], batch['local_act_labels'], compute_loss,
-                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names']
             )
         elif task.startswith('og'):
             outputs = self.forward_og(
@@ -168,10 +159,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_lens'], batch['gmap_step_ids'], batch['gmap_pos_fts'], 
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['obj_labels'], compute_loss,
-                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names']
             )
         elif task.startswith('valid_sap_og'):
             outputs = self.forward_sap_og(
@@ -183,10 +171,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['gmap_visited_masks'], batch['global_act_labels'], batch['local_act_labels'], 
                 batch['obj_labels'],
-                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['traj_reverie_obj_names']
             )
         elif task.startswith('cfp'):
             outputs = self.forward_cfp(
@@ -198,10 +183,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
                 batch['gmap_pair_dists'], batch['gmap_vpids'], batch['vp_pos_fts'],
                 batch['gmap_visited_masks'],
                 batch['global_act_labels'], batch['local_act_labels'], compute_loss,
-                batch['traj_reverie_loc_fts'], batch['extra_heads'], batch['traj_reverie_obj_names'],
-                batch['instr_z_landmark_features'],batch['instr_z_landmark_pzs'],
-                batch['instr_z_direction_features'],batch['instr_z_direction_pzs'],
-                batch['img_z_features'], batch['img_z_pzs']
+                batch['traj_reverie_loc_fts'], batch['extra_heads'], batch['traj_reverie_obj_names']
             )
         else:
             raise ValueError('invalid task')
@@ -217,20 +199,14 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         txt_labels, compute_loss,
-        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None
         ):
         txt_embeds, kdl_txt_embeds, kdl_vp_txt_embeds, kdl_gmap_txt_embeds, kdl_fused_txt_embeds,\
         kdl_fused_img_embeds, kdl_traj_fused_embeds, txt_attns, view_img_attns = self.bert.forward_mlm(
             txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
-            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names
         )
 
         # only compute masked tokens for better efficiency
@@ -268,20 +244,14 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         vp_view_mrc_masks, vp_view_probs, vp_obj_mrc_masks, vp_obj_probs, compute_loss=True,
-        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None
         ):
         _, vp_embeds = self.bert(
             txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
             return_gmap_embeds=False,
-            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names
         )
         
         vp_view_lens = [x[-1] for x in torch.split(traj_vp_view_lens, traj_step_lens)]
@@ -328,10 +298,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         gmap_visited_masks, global_act_labels, local_act_labels, compute_loss,
-        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None
         ):
         batch_size = txt_ids.size(0)
 
@@ -343,10 +310,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
             txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
-            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names
         )
         
         if self.sap_fuse_linear is None:
@@ -421,9 +385,6 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         obj_labels, compute_loss,
         traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None
     ):
         gmap_embeds, vp_embeds, txt_embeds,\
         kdl_txt_embeds, \
@@ -434,10 +395,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
             traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
             return_gmap_embeds=False,
-            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names
         )
 
         vp_view_lens = [x[-1] for x in torch.split(traj_vp_view_lens, traj_step_lens, 0)]
@@ -474,10 +432,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         gmap_visited_masks,
-        traj_reverie_loc_fts=None,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None
+        traj_reverie_loc_fts=None,traj_reverie_obj_names=None
         ):
         batch_size = txt_ids.size(0)
 
@@ -485,10 +440,7 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
             txt_ids, txt_lens, traj_view_img_fts, traj_obj_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
-            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
+            traj_reverie_loc_fts=traj_reverie_loc_fts,traj_reverie_obj_names=traj_reverie_obj_names
         )
         
         if self.sap_fuse_linear is None:
@@ -549,9 +501,6 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         gmap_visited_masks, global_act_labels, local_act_labels, compute_loss,
         traj_reverie_loc_fts=None, extra_heads=False,traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
-        img_z_fts=None, img_z_pzs=None, teacher_outputs=None
     ):
         batch_size = txt_ids.size(0)
 
@@ -565,9 +514,6 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
             gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
             traj_reverie_loc_fts=traj_reverie_loc_fts,
             return_txt_embeds=True,traj_reverie_obj_names=traj_reverie_obj_names,
-            instr_z_landmark_features=instr_z_landmark_features, instr_z_landmark_pzs=instr_z_landmark_pzs,
-            instr_z_direction_features=instr_z_direction_features, instr_z_direction_pzs=instr_z_direction_pzs,
-            z_img_features=img_z_fts, z_img_pzs=img_z_pzs
         )
 
         if extra_heads:
@@ -691,7 +637,6 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
         # 2. for Img
         if 'img' in self.config.kdl.kdl_tasks:
             # 2.1 for img_emb
-            # Note that since the first dimension in the pano_imgs includes several multiple nodes. So it is different to batch_size. Ignore the teacher_sample_weight.
             if 'emb' in self.config.kdl.kdl_task_types:
                 kdl_img_emb_loss = self.kdl_feat_loss(
                     s_outputs['img_emb'],
@@ -777,57 +722,16 @@ class GlocalTextPathCMTPreTraining(BertPreTrainedModel):
             
         if not self.config.kdl.kdl_adaptive_ability_weight:
             kdl_total_loss = kdl_txt_loss + kdl_img_loss + kdl_local_loss + kdl_global_loss + kdl_predict_loss 
-        else:
-            if self.config.kdl.kdl_adaptive_ability_weight_type == 'learn_weight':
-                # type-1: directly use learnable weights to join in optimization (not good)
-                kdl_total_loss = F.softplus(self.bert.kdl_txt_weight) * kdl_txt_loss +\
-                                F.softplus(self.bert.kdl_img_weight) * kdl_img_loss +\
-                                F.softplus(self.bert.kdl_local_weight) * kdl_local_loss +\
-                                F.softplus(self.bert.kdl_global_weight) * kdl_global_loss +\
-                                F.softplus(self.bert.kdl_predict_weight) * kdl_predict_loss 
-                    
-                loss_record_list['kdl_loss_adaptive_weight_txt'] = F.softplus(self.bert.kdl_txt_weight).cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_img'] = F.softplus(self.bert.kdl_img_weight).cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_local'] = F.softplus(self.bert.kdl_local_weight).cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_global'] = F.softplus(self.bert.kdl_global_weight).cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_predict'] = F.softplus(self.bert.kdl_predict_weight).cpu().detach().numpy().item()
+        elif self.config.kdl.kdl_adaptive_ability_weight_type == 'RW':
+            weights = torch.randn(5).to(self.device) # standard normalized distribution
+            softmax_weights = F.softmax(weights/self.config.kdl.rw_temp, dim=0)*5
+            kdl_total_loss = softmax_weights[0] * kdl_txt_loss +\
+                softmax_weights[1] * kdl_img_loss +\
+                softmax_weights[2] * kdl_local_loss +\
+                softmax_weights[3] * kdl_global_loss +\
+                softmax_weights[4] * kdl_predict_loss 
             
-            elif self.config.kdl.kdl_adaptive_ability_weight_type == 'DWA':
-                # type-2: dynamic weight average from paper "End-to-End Multi-Task Learning with Attention"
-                # TODO: not debug yet.
-                t_losses = []
-                t_losses.append(kdl_txt_loss.detach() / last_t_losses['kdl_txt_loss'])
-                t_losses.append(kdl_img_loss.detach() / last_t_losses['kdl_img_loss'])
-                t_losses.append(kdl_local_loss.detach() / last_t_losses['kdl_local_loss'])
-                t_losses.append(kdl_global_loss.detach() / last_t_losses['kdl_global_loss'])
-                t_losses.append(kdl_predict_loss.detach() / last_t_losses['kdl_predict_loss'])
-                weights = torch.softmax(torch.from_numpy(np.array(t_losses)) / self.config.dwa_t, dim=1).to(self.device)
-                
-                kdl_total_loss = weights[0] * kdl_txt_loss +\
-                    weights[1] * kdl_img_loss +\
-                    weights[2] * kdl_local_loss +\
-                    weights[3] * kdl_global_loss +\
-                    weights[4] * kdl_predict_loss 
-                
-                loss_record_list['kdl_loss_adaptive_weight_txt'] = weights[0].cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_img'] = weights[1].cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_local'] = weights[2].cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_global'] = weights[3].cpu().detach().numpy().item()
-                loss_record_list['kdl_loss_adaptive_weight_predict'] = weights[4].cpu().detach().numpy().item()
-                
-                del weights
-        
-            elif self.config.kdl.kdl_adaptive_ability_weight_type == 'RW':
-                # type-3: random weight from paper "Reasonable Effectiveness of Random Weighting: A Litmus Test for Multi-Task Learning"
-                weights = torch.randn(5).to(self.device) # standard normalized distribution
-                softmax_weights = F.softmax(weights/self.config.kdl.rw_temp, dim=0)*5
-                kdl_total_loss = softmax_weights[0] * kdl_txt_loss +\
-                    softmax_weights[1] * kdl_img_loss +\
-                    softmax_weights[2] * kdl_local_loss +\
-                    softmax_weights[3] * kdl_global_loss +\
-                    softmax_weights[4] * kdl_predict_loss 
-                
-                del weights, softmax_weights
+            del weights, softmax_weights
         
         loss_record_list['kdl_loss'] = kdl_total_loss.cpu().detach().numpy().item()
         

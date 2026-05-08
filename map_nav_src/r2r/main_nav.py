@@ -140,9 +140,6 @@ def build_dataset(args, rank=0):
     
     if args.submit and args.dataset != 'rxr':
         val_env_names.append('test')
-    
-    if args.sim_env == 'tjark':
-        val_env_names = ['train', 'test']
         
     val_envs = {}
     for split in val_env_names:
@@ -601,7 +598,7 @@ def valid(args, train_env, val_envs, rank=-1, z_dicts=None, front_feat_loader=No
         iters = None
         start_time = time.time()
         agent.test(
-            use_dropout=False, feedback='argmax', iters=iters,z_dicts=s_z_dicts, z_front_dict=z_front_dict, role='student', ensemble_n=args.ensemble_n)
+            use_dropout=False, feedback='argmax', iters=iters,z_dicts=s_z_dicts, z_front_dict=z_front_dict, role='student')
         print(env_name, 'cost time: %.2fs' % (time.time() - start_time))
         preds = agent.get_results(detailed_output=args.detailed_output)
         preds = merge_dist_results(all_gather(preds))
@@ -646,7 +643,7 @@ def valid(args, train_env, val_envs, rank=-1, z_dicts=None, front_feat_loader=No
             iters = None
             start_time = time.time()
             agent.test(
-                use_dropout=False, feedback='argmax', iters=iters,t_z_dicts=z_dicts, t_z_front_dict=t_z_front_dict, test_teacher=True, role='teacher', ensemble_n=args.ensemble_n)
+                use_dropout=False, feedback='argmax', iters=iters,t_z_dicts=z_dicts, t_z_front_dict=t_z_front_dict, test_teacher=True, role='teacher')
             print(env_name, 'cost time: %.2fs' % (time.time() - start_time))
             preds = agent.get_results(detailed_output=args.detailed_output)
             preds = merge_dist_results(all_gather(preds))

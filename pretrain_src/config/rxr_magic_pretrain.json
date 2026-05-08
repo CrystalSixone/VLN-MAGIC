@@ -40,8 +40,6 @@
             "clip768_img_ft_file": "../datasets/R2R/features/CLIP-ViT-B-16-views.hdf5",
             "scanvp_cands_file": "../datasets/R2R/annotations/scanvp_candview_relangles.json",
             "cat_file": "../datasets/R2R/annotations/category_mapping.tsv",
-            "img_zdict_file": "../datasets/R2R/features/image_z_dict_50.tsv",
-            "instr_zdict_file": "../datasets/R2R/features/instr_z_dict.tsv",
             "aug_img_file": "../datasets/EnvEdit/hamt_features/CLIP-ViT-B-16-views-st-samefilter.hdf5",
             "tasks": [
                 "mlm",

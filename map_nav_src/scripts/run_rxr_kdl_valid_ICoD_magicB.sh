@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_b_valid
+name=rxr_Student_magicB_Teacher_magicL_ICoD_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -11,11 +11,17 @@ seed=0
 
 outdir=${DATA_ROOT}/RxR/
 
-student_model_type=magic_s
-teacher_model_type=magic_m
-student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/ckpts/best_val_unseen.pt
-student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/backdoor/backdoor_update_features.tsv
-student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/frontdoor/frontdoor_update_features.tsv
+student_model_type=magic_b
+teacher_model_type=magic_l
+
+teacher_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/ckpts/teacher_best_val_unseen.pt
+teacher_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/logs/backdoor/teacher_backdoor_update_features.tsv
+teacher_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/logs/frontdoor/teacher_frontdoor_update_features.tsv
+
+student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/ckpts/best_val_unseen.pt
+student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/logs/backdoor/backdoor_update_features.tsv
+student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B_ICoD/logs/frontdoor/frontdoor_update_features.tsv
+
 
 flag="--root_dir ${DATA_ROOT}
       --dataset rxr
@@ -70,12 +76,16 @@ flag="--root_dir ${DATA_ROOT}
 
       --student_model_type ${student_model_type}
       --teacher_model_type ${teacher_model_type}
-      
+
+      --teacher_resume_file ${teacher_resume_file}
+      --t_frontdoor_dict_file ${teacher_frontdoor_file}
+      --backdoor_dict_file ${teacher_backdoor_file}
+
       --student_resume_file ${student_resume_file}
       --s_frontdoor_dict_file ${student_frontdoor_file}
       --s_backdoor_dict_file ${student_backdoor_file}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='3' python r2r/main_nav.py $flag \
       --submit

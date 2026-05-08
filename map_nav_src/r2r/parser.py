@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument('--ignoreid', type=int, default=-100, help='ignoreid for action')
     
     # Load the model from
-    parser.add_argument("--resume_file", default=None, help='path of the trained model')
+    parser.add_argument("--student_resume_file", default=None, help='path of the trained model')
     parser.add_argument("--resume_optimizer", action="store_true", default=False)
 
     # Augmented Paths from
@@ -63,6 +63,7 @@ def parse_args():
     # Dropout Param
     parser.add_argument('--dropout', type=float, default=0.1)
     parser.add_argument('--feat_dropout', type=float, default=0.4)
+    parser.add_argument("--img_dropout", type=float, default=0) # useless
     parser.add_argument('--views', type=int, default=36)
 
     # Submision configuration
@@ -145,20 +146,14 @@ def parse_args():
     '''knwoledge distillation'''
     # settings
     parser.add_argument("--train_kdl", action='store_true', default=False) # use knowledge distillation
-    parser.add_argument("--train_kdl_noFeat", action='store_true', default=False)
-    parser.add_argument("--train_kdl_noAttn", action='store_true', default=False) 
-    parser.add_argument("--train_kdl_noLogit", action='store_true', default=False) 
     parser.add_argument('--kd_ability_types', nargs='+', type=str, default=['txt', 'img', 'local', 'global', 'action'])
     parser.add_argument("--kdl_feat_loss", type=str, default='mse') # mse / kl
     parser.add_argument("--kdl_attn_loss", type=str, default='mse') # mse / kl
     parser.add_argument("--kdl_logit_loss", type=str, default='kd') # kd / dkd
     parser.add_argument("--kdl_temperature", type=int, default=1)
     parser.add_argument("--kdl_alpha", type=float, default=0.5)
-    parser.add_argument("--kdl_dkd_alpha", type=float, default=1) # for decoupling kd loss
-    parser.add_argument("--kdl_dkd_beta", type=float, default=8)
-    parser.add_argument("--train_kdl_teacher", action='store_true', default=False)
+    parser.add_argument("--train_kdl_teacher", action='store_true', default=False) # Enable to train the teacher model (ICoD)
     parser.add_argument("--t_lr", type=float, default=0.000005)
-    parser.add_argument("--ensemble_n", type=int, default=1) # ensemble model test
     
     parser.add_argument("--kdl_adaptive_ability_weight", action='store_true', default=False) # Adaptive weights for Meta-ability KD
     parser.add_argument("--kdl_adaptive_ability_weight_type", type=str, default='RW') # learn_weight / DWA / RW
@@ -170,6 +165,7 @@ def parse_args():
     parser.add_argument("--t_sample_preprocess_exp_decay", type=float, default=0.7) # the exp decay when using exp for t-sample-proprocessing.
 
     # models
+    parser.add_argument("--teacher_model_type", type=str, default="magic_l") # magic_l / magic_b / magic_m / magic_s
     parser.add_argument("--teacher_hidden_size", type=int, default=768)
     parser.add_argument("--teacher_num_attention_heads", type=int, default=12)
     parser.add_argument("--teacher_mlp_ratio", type=int, default=4)
@@ -183,7 +179,8 @@ def parse_args():
     parser.add_argument('--t_backdoor_dict_file', type=str, default='')
     parser.add_argument('--t_kdl_alpha', type=float, default=0.5)
 
-    parser.add_argument("--student_hidden_size", type=int, default=384)
+    parser.add_argument("--student_model_type", type=str, default="magic_b") # magic_l / magic_b / magic_m / magic_s
+    parser.add_argument("--student_hidden_size", type=int, default=128)
     parser.add_argument("--student_num_attention_heads", type=int, default=6)
     parser.add_argument("--student_mlp_ratio", type=int, default=4)
     parser.add_argument("--student_intermediate_size", type=int, default=1536)
@@ -201,7 +198,7 @@ def parse_args():
     parser.add_argument("--name",type=str,default='debug')
     parser.add_argument("--for_debug",action='store_true',default=False) 
     parser.add_argument("--use_lr_sch",action='store_true',default=False)
-    parser.add_argument("--lr_sch",type=str,default='polynomial') # constant\constant_with_warmup\linear\polynomial\cosine\cosine_with_restarts
+    parser.add_argument("--lr_sch",type=str,default='polynomial') 
 
     args, _ = parser.parse_known_args()
 
@@ -239,6 +236,16 @@ def postprocess_args(args):
     args.instr_zdict_size = 81
     args.rxr_instr_zdict_roberta_file = os.path.join(ROOTDIR, 'R2R', 'features', 'rxr_z_instr_dict.tsv')
 
+    # different hidden sizes for knowledge distillation
+    model_hidden_size = {
+        "magic_l": 768,
+        "magic_b": 384,
+        "magic_m": 256,
+        "magic_s": 128
+    }
+    args.teacher_hidden_size = model_hidden_size[args.teacher_model_type]
+    args.student_hidden_size = model_hidden_size[args.student_model_type]
+
     # For cfp intervention (frontdoor)
     cfp_file_map = {
         768: 'r2r_cfp_features.tsv',
@@ -255,6 +262,8 @@ def postprocess_args(args):
         128: 'rxr_vlnkdl_cfp_features_128.tsv',
     }
     
+    args.t_front_feat_file = os.path.join(ROOTDIR, 'R2R', 'features', 'r2r_cfp_features.tsv')
+    args.rxr_t_front_feat_file = os.path.join(ROOTDIR, 'R2R', 'features', 'rxr_cfp_features.tsv')
     args.front_feat_file = os.path.join(ROOTDIR, 'R2R', 'features', cfp_file_map[args.student_hidden_size])
     args.rxr_front_feat_file = os.path.join(ROOTDIR, 'R2R', 'features', rxr_cfp_file_map[args.student_hidden_size])
 

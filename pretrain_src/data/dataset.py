@@ -69,71 +69,6 @@ def preprocess_name(name,cat_mapping,cat_number):
     number = cat_number[name]
     return name, number
 
-class LoadZdict():
-    def __init__(self, img_zdict_file, txt_zdict_file):
-        self.img_tsv_fieldnames = ['roomtype','feature','pz']
-        self.txt_tsv_fieldnames = ['token_type','token','feature','pz']
-        self.img_zdict_file = img_zdict_file
-        self.txt_zdict_file = txt_zdict_file
-
-    def read_img_tsv(self):
-        in_data = []
-        with open(self.img_zdict_file, 'rt') as tsv_in_file:
-            reader = csv.DictReader(tsv_in_file, delimiter='\t', fieldnames = self.img_tsv_fieldnames)
-            for item in reader:
-                item['feature'] = np.frombuffer(base64.b64decode(item['feature']), dtype=np.float32)
-                item['pz'] = float(item['pz'])
-                in_data.append(item)
-        return in_data
-
-    def read_instr_tsv(self):
-        in_data = []
-        with open(self.txt_zdict_file, 'rt') as tsv_in_file:
-            reader = csv.DictReader(tsv_in_file, delimiter='\t', fieldnames = self.txt_tsv_fieldnames)
-            for item in reader:
-                item['feature'] = np.frombuffer(base64.b64decode(item['feature']), dtype=np.float32)
-                item['pz'] = float(item['pz'])
-                in_data.append(item)
-        return in_data
-    
-    def load_all_zdicts(self):
-        img_zdict, instr_zdict = self.read_img_tsv(), self.read_instr_tsv()
-        return img_zdict, instr_zdict
-
-    def load_img_tensor(self):
-        img_features = []
-        img_pzs = []
-        with open(self.img_zdict_file, 'rt') as tsv_in_file:
-            reader = csv.DictReader(tsv_in_file, delimiter='\t', fieldnames = self.img_tsv_fieldnames)
-            for item in reader:
-                img_features.append(np.frombuffer(base64.b64decode(item['feature']), dtype=np.float32))
-                img_pzs.append(float(item['pz']))
-        return {
-            "img_features": torch.from_numpy(np.array(img_features)),
-            "img_pzs": torch.from_numpy(np.array(img_pzs))
-        }
-
-    def load_instr_tensor(self):
-        instr_direction_features = []
-        instr_direction_pzs = []
-        instr_landmark_features = []
-        instr_landmark_pzs = []
-        with open(self.txt_zdict_file, 'rt') as tsv_in_file:
-            reader = csv.DictReader(tsv_in_file, delimiter='\t', fieldnames = self.txt_tsv_fieldnames)
-            for item in reader:
-                if item['token_type'] == 'direction':
-                    instr_direction_features.append(np.frombuffer(base64.b64decode(item['feature']), dtype=np.float32))
-                    instr_direction_pzs.append(float(item['pz']))
-                elif item['token_type'] == 'landmark':
-                    instr_landmark_features.append(np.frombuffer(base64.b64decode(item['feature']), dtype=np.float32))
-                    instr_landmark_pzs.append(float(item['pz']))
-        return {
-            "instr_direction_features": torch.from_numpy(np.array(instr_direction_features)),
-            "instr_direction_pzs": torch.from_numpy(np.array(instr_direction_pzs)),
-            "instr_landmark_features": torch.from_numpy(np.array(instr_landmark_features)),
-            "instr_landmark_pzs": torch.from_numpy(np.array(instr_landmark_pzs)),
-        }
-
 class ReverieTextPathData(object):
     def __init__(
         self, anno_files, img_ft_db, obj_ft_db, scanvp_cands_file, connectivity_dir,
@@ -709,7 +644,6 @@ class R2RTextPathData(ReverieTextPathData):
             outs['local_act_labels'] = local_act_label
 
         if return_img_probs:
-            # TODO: whether adding gmap img probs
             outs['vp_view_probs'] = softmax(traj_view_img_fts[-1][:, self.image_feat_size:], dim=1)
         
         if self.z_dicts is not None:

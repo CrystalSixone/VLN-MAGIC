@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_b_valid
+name=r2r_magic_l_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -9,16 +9,15 @@ features=clip768
 ngpus=1
 seed=0
 
-outdir=${DATA_ROOT}/RxR/
+outdir=${DATA_ROOT}/R2R/
 
-student_model_type=magic_s
-teacher_model_type=magic_m
-student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/ckpts/best_val_unseen.pt
-student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/backdoor/backdoor_update_features.tsv
-student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/frontdoor/frontdoor_update_features.tsv
+student_model_type=magic_l
+student_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/ckpts/best_val_unseen.pt
+student_backdoor_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/logs/backdoor/backdoor_update_features.tsv
+student_frontdoor_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/logs/frontdoor/frontdoor_update_features.tsv
 
 flag="--root_dir ${DATA_ROOT}
-      --dataset rxr
+      --dataset r2r
       --output_dir ${outdir}
       --world_size ${ngpus}
       --seed ${seed}
@@ -30,11 +29,11 @@ flag="--root_dir ${DATA_ROOT}
       --graph_sprels
       --fusion dynamic
 
-      --expert_policy ndtw
+      --expert_policy spl
       --train_alg ${train_alg}
       
-      --max_action_len 28
-      --max_instr_len 250
+      --max_action_len 15
+      --max_instr_len 200
 
       --batch_size 16
       --lr 4e-5
@@ -54,7 +53,6 @@ flag="--root_dir ${DATA_ROOT}
       --gamma 0.
       
       --cat_file ../datasets/R2R/annotations/category_mapping.tsv
-      --adaptive_pano_fusion
 
       --do_back_txt
       --do_back_img
@@ -66,11 +64,8 @@ flag="--root_dir ${DATA_ROOT}
       --do_front_his
       --front_n_clusters 24
 
-      --train_kdl
-
       --student_model_type ${student_model_type}
-      --teacher_model_type ${teacher_model_type}
-      
+
       --student_resume_file ${student_resume_file}
       --s_frontdoor_dict_file ${student_frontdoor_file}
       --s_backdoor_dict_file ${student_backdoor_file}

@@ -11,11 +11,11 @@ seed=0
 
 outdir=${DATA_ROOT}/RxR/
 
-student_model_type=magic_s
-teacher_model_type=magic_m
-student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/ckpts/best_val_unseen.pt
-student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/backdoor/backdoor_update_features.tsv
-student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/frontdoor/frontdoor_update_features.tsv
+student_model_type=magic_b
+teacher_model_type=magic_l
+student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_B/ckpts/best_val_unseen.pt
+student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B/logs/backdoor/backdoor_update_features.tsv
+student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_B/logs/frontdoor/frontdoor_update_features.tsv
 
 flag="--root_dir ${DATA_ROOT}
       --dataset rxr
@@ -70,12 +70,12 @@ flag="--root_dir ${DATA_ROOT}
 
       --student_model_type ${student_model_type}
       --teacher_model_type ${teacher_model_type}
-      
+
       --student_resume_file ${student_resume_file}
       --s_frontdoor_dict_file ${student_frontdoor_file}
       --s_backdoor_dict_file ${student_backdoor_file}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='3' python r2r/main_nav.py $flag \
       --submit

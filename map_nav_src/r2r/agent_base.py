@@ -19,7 +19,7 @@ from utils.distributed import is_default_gpu
 from utils.logger import print_progress
 from utils.data import PickSpecificWords
 
-from utils.kd_loss import kd_loss, dkd_loss, mse_loss, exponential_decay, invert_normalized_losses
+from utils.kd_loss import kd_loss, mse_loss, exponential_decay, invert_normalized_losses
 
 class WarmUpLR(torch.optim.lr_scheduler._LRScheduler):
     def __init__(self, optimizer, warmup_iters, last_epoch=-1):
@@ -162,11 +162,8 @@ class Seq2SeqAgent(BaseAgent):
                 self.kdl_attn_loss = mse_loss
             elif self.args.kdl_attn_loss == 'kl':
                 self.kdl_attn_loss = kd_loss
-            
-            if self.args.kdl_logit_loss == 'kd':
-                self.kdl_logit_loss = kd_loss
-            elif self.args.kdl_logit_loss == 'dkd':
-                self.kdl_logit_loss = dkd_loss
+                
+            self.kdl_logit_loss = kd_loss
                 
             if self.args.teacher_sample_hard_mining:
                 if self.args.t_sample_preprocess == 'exp':
@@ -183,34 +180,24 @@ class Seq2SeqAgent(BaseAgent):
 
     def test(self, use_dropout=False, feedback='argmax', iters=None, 
              z_dicts={}, z_front_dict=None, role='student', t_z_dicts={},
-             t_z_front_dict=None,test_teacher=False, ensemble_n=1):
+             t_z_front_dict=None,test_teacher=False):
         ''' Evaluate once on each instruction in the current environment '''
         self.feedback = feedback
-        use_dropout = use_dropout if ensemble_n == 1 else True
+        use_dropout = False
         if role == 'student':
             if use_dropout:
                 self.vln_bert.train()
-                if ensemble_n > 1:
-                    # ensemble model test
-                    for name, param in self.vln_bert.vln_bert.named_parameters():
-                        param.requires_grad = False
-                    self.rollout = self.ensemble_rollout
             else:
                 self.vln_bert.eval()
         elif role == 'teacher':
             if use_dropout:
                 self.teacher_vln_bert.train()
-                if ensemble_n > 1:
-                    # ensemble model test
-                    for name, param in self.teacher_vln_bert.vln_bert.named_parameters():
-                        param.requires_grad = False
-                    self.rollout = self.ensemble_rollout
             else:
                 self.teacher_vln_bert.eval()
         
         super().test(iters=iters, z_dicts=z_dicts, z_front_dict=z_front_dict,
                 t_z_dicts=t_z_dicts, t_z_front_dict=t_z_front_dict,
-                test_teacher=test_teacher, ensemble_n=ensemble_n)
+                test_teacher=test_teacher)
 
     def train(self, n_iters, feedback='teacher', z_dicts={}, z_front_dict={}, t_z_dicts={}, 
               acc_grads=None, t_acc_grads=None, cur_iter=0, **kwargs):

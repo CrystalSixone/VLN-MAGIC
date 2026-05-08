@@ -1,5 +1,5 @@
 #!/bin/bash
-name=r2r_magic-b_trian
+name=r2r_magic-b_train
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -14,25 +14,16 @@ seed=0
 
 outdir=${DATA_ROOT}/R2R/
 
-speaker_envedit_file=${DATA_ROOT}/R2R/speaker/20230313_transpeaker_clip768_envedit/state_dict/best_both_bleu
-
+speaker_envedit_file=${DATA_ROOT}/R2R/speaker/transpeaker_r2r/state_dict/best_both_bleu
 augdir=${DATA_ROOT}/R2R/annotations/prevalent_aug_train_enc.json
 
-teacher_file=${DATA_ROOT}/R2R/navigator/20231203_GOAT_R2R_1006_do24_speaker_ft5e-6_withTxtLN/ckpts/best_val_unseen
-teacher_backdoor_file=${DATA_ROOT}/R2R/navigator/20231203_GOAT_R2R_1006_do24_speaker_ft5e-6_withTxtLN/logs/backdoor/update_instr_z_dict_1900.tsv
-teacher_frontdoor_file=${DATA_ROOT}/R2R/navigator/20231203_GOAT_R2R_1006_do24_speaker_ft5e-6_withTxtLN/logs/frontdoor/z_front_feature_1900.tsv
+teacher_file=${DATA_ROOT}/R2R/navigator/GOAT/ckpts/best_val_unseen
+teacher_backdoor_file=${DATA_ROOT}/R2R/navigator/GOAT/logs/backdoor/update_instr_z_dict.tsv
+teacher_frontdoor_file=${DATA_ROOT}/R2R/navigator/GOAT/logs/frontdoor/z_front_feature.tsv
 
-student_B_pretrain_file
-student_M_pretrain_file
-student_S_pretrain_file
-
-suzhou_kdmse_t2_alpha5_file=${DATA_ROOT}/R2R/pretrain/20240214_r2r_kdl_pretrain_KDmse_t2_alpha0.5/ckpts/model_step_best_166500.pt
-lan3_x2_pano1_h384_20240303_file=${DATA_ROOT}/R2R/pretrain/20240303_r2r_kdl_pt_KD_t2_lan3_x2_pano1_h384/ckpts/model_step_best_169500.pt
-lan6_x3_pano2_h256_inter1024_20240305_file=${DATA_ROOT}/R2R/pretrain/20240305_r2r_kdl_pt_KD_t2_lan6_x3_pano2_h256_inter1024/ckpts/model_step_best_160500.pt
-lan3_x2_pano1_h256_inter512_20240308_file=${DATA_ROOT}/R2R/pretrain/20240308_r2r_kdl_pt_KD_t2_lan3_x2_pano1_h256_inter512/ckpts/model_step_best_190500.pt
-lan6x2pano2h768scale4_scaleVLN_file=${DATA_ROOT}/R2R/pretrain/20230909_r2r_GOAT_pretrain_meter_tim_scaleVLN/ckpts/model_step_best_157500.pt
-lan9_x6_p2_h768_file=${DATA_ROOT}/R2R/pretrain/20240601_r2r_GOAT_pretrain_scaleVLN_l9x6p2/ckpts/model_step_best.pt
-l6x2p2h768_scaleVLN_file=${DATA_ROOT}/R2R/pretrain/20240411_r2r_GOAT_pretrain_meter_tim_scaleVLN_ft1024_bs200/ckpts/model_step_best.pt
+student_B_pretrain_file=${DATA_ROOT}/R2R/pretrain/MAGIC_B
+student_M_pretrain_file=${DATA_ROOT}/R2R/pretrain/MAGIC_M
+student_S_pretrain_file=${DATA_ROOT}/R2R/pretrain/MAGIC_S
 
 flag="--root_dir ${DATA_ROOT}
       --dataset r2r
@@ -71,7 +62,6 @@ flag="--root_dir ${DATA_ROOT}
       --gamma 0.
       
       --cat_file ../datasets/R2R/annotations/category_mapping.tsv
-      --adaptive_pano_fusion
 
       --use_transpeaker
       --speaker ${speaker_envedit_file}
@@ -119,8 +109,6 @@ flag="--root_dir ${DATA_ROOT}
       --teacher_sample_hard_mining
       --t_sample_preprocess exp
       --t_sample_preprocess_exp_decay 0.7
-
-      --kd_ability_types txt img local global action
 
       --use_lr_sch
       --use_warm_up

@@ -67,38 +67,10 @@ class LanguageEncoderDo(nn.Module):
         if not self.update_lang_bert:
             for name, param in self.layer.named_parameters():
                 param.requires_grad = False
-        
-        # for action and object
-        if self.config.do_back_txt:
-            if self.config.z_cross_attn:
-                self.z_direc_cross_attn = RobertaAttention(config)
-                self.z_landm_cross_attn = RobertaAttention(config)
-            self.z_txt_linear = nn.Linear(config.hidden_size,config.hidden_size)
-            self.z_direct_linear = nn.Linear(config.hidden_size,config.hidden_size)
-            self.z_landm_linear = nn.Linear(config.hidden_size, config.hidden_size)
-            self.z_concat_layernorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            self.z_direct_ln = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            self.z_landm_ln = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            if self.config.do_back_txt_type == 'type_2':
-                self.z_direc_cross_attn = RobertaAttention(config)
-                self.z_landm_cross_attn = RobertaAttention(config)
-                self.txt_self_attn = RobertaAttention(config)
-                self.instr_aug_linear = nn.Linear(config.hidden_size,1)
-                self.instr_ori_linear = nn.Linear(config.hidden_size,1)
-                self.instr_sigmoid = nn.Sigmoid()
-                self.concat_linear = nn.Linear(config.hidden_size*3, config.hidden_size)
-        
-        # Frontdoor Intervention
-        if config.do_front_txt:
-            self.z_front_cross_attn = RobertaAttention(config)
-            self.z_front_linear = nn.Linear(config.hidden_size,config.hidden_size)
-            self.z_front_ln = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, txt_embeds, txt_masks, 
-                z_direc_embeds=None, z_direc_pzs=None, z_landm_embeds=None, z_landm_pzs=None,
-                front_txt_embeds=None):
+    def forward(self, txt_embeds, txt_masks):
         extended_txt_masks = extend_neg_masks(txt_masks)
 
         # BERT
@@ -109,62 +81,6 @@ class LanguageEncoderDo(nn.Module):
         if not self.update_lang_bert:
             txt_embeds = txt_embeds.detach()
  
-        # Causal Intervention
-        if z_direc_embeds is not None:
-            if self.config.do_back_txt_type == 'type_1':
-                if self.config.z_cross_attn:
-                    z_direc_embeds = self.z_direc_cross_attn(z_direc_embeds, 
-                                                             encoder_hidden_states=txt_embeds, 
-                                                             encoder_attention_mask=extended_txt_masks)[0] 
-                    z_landm_embeds = self.z_landm_cross_attn(z_landm_embeds, 
-                                                             encoder_hidden_states=txt_embeds, 
-                                                             encoder_attention_mask=extended_txt_masks)[0]
-                p_z_direct = z_direc_embeds * z_direc_pzs.to(torch.float32) # [bs,len_d,dim]
-                sum_z_direct = torch.sum(p_z_direct,1).unsqueeze(1) # [bs,1,dim]
-                p_z_landm = z_landm_embeds * z_landm_pzs.to(torch.float32) # [bs,len_l,dim]
-                sum_z_landm = torch.sum(p_z_landm,1).unsqueeze(1) # [bs,1,dim]
-                txt_embeds = self.z_txt_linear(txt_embeds) + self.z_direct_linear(sum_z_direct) + self.z_landm_linear(sum_z_landm)
-                if front_txt_embeds is not None:
-                    # Frontdoor Intervention
-                    z_front_embeds = self.z_front_cross_attn(txt_embeds, 
-                                                            encoder_hidden_states=front_txt_embeds)[0] 
-                    z_front_embeds = self.z_front_ln(self.z_front_linear(z_front_embeds))
-                    txt_embeds = txt_embeds + z_front_embeds
-                txt_embeds = self.z_concat_layernorm(txt_embeds)
-            elif self.config.do_back_txt_type == 'type_2':
-                z_direc_embeds = self.z_direc_cross_attn(txt_embeds, 
-                                                        encoder_hidden_states=z_direc_embeds)[0] 
-                z_direc_embeds = self.z_direct_ln(self.z_direct_linear(z_direc_embeds))
-                if z_landm_embeds is not None:
-                    z_landm_embeds = self.z_landm_cross_attn(txt_embeds, 
-                                                            encoder_hidden_states=z_landm_embeds)[0]
-                    z_landm_embeds = self.z_landm_ln(self.z_landm_linear(z_landm_embeds))
-                
-                if front_txt_embeds is not None:
-                    # Frontdoor Intervention
-                    z_front_embeds = self.z_front_cross_attn(txt_embeds, 
-                                                            encoder_hidden_states=front_txt_embeds)[0] 
-                    z_front_embeds = self.z_front_ln(self.z_front_linear(z_front_embeds))
-                
-                if self.config.do_add_method == 'door':
-                    instr_aug_embeds = z_direc_embeds
-                    if z_landm_embeds is not None:
-                        instr_aug_embeds = instr_aug_embeds + z_landm_embeds
-                    if front_txt_embeds is not None:
-                        instr_aug_embeds = instr_aug_embeds + z_front_embeds
-                        
-                    aug_linear_weight = self.instr_aug_linear(instr_aug_embeds)
-                    ori_linear_weight = self.instr_ori_linear(txt_embeds)
-                    aug_weight = self.instr_sigmoid(aug_linear_weight+ori_linear_weight)
-                    txt_embeds = torch.mul(aug_weight,instr_aug_embeds) + torch.mul((1-aug_weight),txt_embeds)  
-                elif self.config.do_add_method == 'add':
-                    txt_embeds = txt_embeds + z_direc_embeds + z_landm_embeds
-                    if front_txt_embeds is not None:
-                        txt_embeds = txt_embeds + z_front_embeds
-                elif self.config.do_add_method == 'concat':
-                    concat_txt_embeds = torch.cat((txt_embeds, z_direc_embeds, z_landm_embeds),-1)
-                    txt_embeds = self.concat_linear(concat_txt_embeds)
-
         return txt_embeds
 
 
@@ -308,7 +224,7 @@ class CausalImageEmbeddings(nn.Module):
         traj_step_lens, traj_vp_view_lens, type_embed_layer, 
         traj_reverie_obj_fts=None, traj_reverie_obj_lens=None,
         traj_reverie_obj_locs=None, 
-        z_img_features=None, z_img_pzs=None, traj_reverie_obj_names=None
+        traj_reverie_obj_names=None
     ):
         view_img_embeds = self.img_layer_norm(self.img_linear(traj_view_img_fts))
         if self.config.name != 'REVERIE' and self.config.name != 'SOON':
@@ -316,18 +232,6 @@ class CausalImageEmbeddings(nn.Module):
         
         img_masks = gen_seq_masks(traj_vp_view_lens)
         extended_img_masks = extend_neg_masks(img_masks)
-
-        if z_img_features is not None:
-            # Do intervention
-            z_img_embeds = self.do_back_img_layer_norm(self.do_back_img_before_linear(z_img_features))
-            if self.config.z_cross_attn:
-                z_img_embeds = self.do_back_img_attn(
-                    z_img_embeds, 
-                    encoder_hidden_states=view_img_embeds, encoder_attention_mask=extended_img_masks)[0]
-            p_z_img = z_img_embeds * z_img_pzs.to(torch.float32)
-            sum_z_img = torch.sum(p_z_img,1).unsqueeze(1) #[bs,1,dim]
-            view_img_embeds = self.img_after_linear(view_img_embeds) + self.do_back_img_after_linear(sum_z_img)
-            view_img_embeds = self.do_back_img_concat_layernorm(view_img_embeds)
 
         if self.config.name != 'REVERIE' and self.config.name != 'SOON':
             view_img_embeds = self.dropout(view_img_embeds)
@@ -612,28 +516,19 @@ class GlocalTextPathCMT(BertPreTrainedModel):
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         return_gmap_embeds=True,         
         z_img_features=None, z_img_pzs=None, traj_reverie_loc_fts=None, return_txt_embeds=False,
-        traj_reverie_obj_names=None, 
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        traj_reverie_obj_names=None
     ):        
         # text embedding
         txt_token_type_ids = torch.zeros_like(txt_ids)
         txt_masks = gen_seq_masks(txt_lens)
         kdl_txt_embeds = None
-        if self.config.do_back_txt:
-            txt_embeds, z_direc_embeds,z_landm_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids, instr_z_direction_features=instr_z_direction_features, instr_z_landmark_features=instr_z_landmark_features)
-            if self.kd:
-                kdl_txt_embeds = txt_embeds.clone()
-                if self.role == 'student' and self.kd:
-                    kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks, z_direc_embeds=z_direc_embeds, z_direc_pzs=instr_z_direction_pzs, z_landm_embeds=z_landm_embeds, z_landm_pzs=instr_z_landmark_pzs)
-        else:
-            txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
-            if self.kd:
-                kdl_txt_embeds = txt_embeds.clone()
-                if self.role == 'student' and self.kd:
-                    kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
+
+        txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
+        if self.kd:
+            kdl_txt_embeds = txt_embeds.clone()
+            if self.role == 'student' and self.kd:
+                kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
+        txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
         extended_txt_masks = extend_neg_masks(txt_masks)
         
         # trajectory embedding
@@ -642,7 +537,7 @@ class GlocalTextPathCMT(BertPreTrainedModel):
             traj_view_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, self.embeddings.token_type_embeddings,
             traj_obj_img_fts, traj_vp_obj_lens, traj_reverie_loc_fts,
-            z_img_features, z_img_pzs, traj_reverie_obj_names
+            traj_reverie_obj_names
         )
         
         # gmap embeds
@@ -689,18 +584,12 @@ class GlocalTextPathCMT(BertPreTrainedModel):
         # text embedding
         txt_token_type_ids = torch.zeros_like(txt_ids)
         txt_masks = gen_seq_masks(txt_lens)
-        if self.config.do_back_txt:
-            txt_embeds, z_direc_embeds,z_landm_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids, instr_z_direction_features=instr_z_direction_features, instr_z_landmark_features=instr_z_landmark_features)
-            kdl_txt_embeds = txt_embeds.clone()
-            if self.role == 'student' and self.kd:
-                kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks, z_direc_embeds=z_direc_embeds, z_direc_pzs=instr_z_direction_pzs, z_landm_embeds=z_landm_embeds, z_landm_pzs=instr_z_landmark_pzs)
-        else:
-            txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
-            kdl_txt_embeds = txt_embeds.clone()
-            if self.role == 'student' and self.kd:
-                kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
+
+        txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
+        kdl_txt_embeds = txt_embeds.clone()
+        if self.role == 'student' and self.kd:
+            kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
+        txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
         extended_txt_masks = extend_neg_masks(txt_masks)
         
         split_traj_embeds, split_traj_vp_lens, split_traj_fused_embeds,\
@@ -708,7 +597,7 @@ class GlocalTextPathCMT(BertPreTrainedModel):
             traj_view_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, self.embeddings.token_type_embeddings,
             traj_obj_img_fts, traj_vp_obj_lens, traj_reverie_loc_fts,
-            z_img_features, z_img_pzs, traj_reverie_obj_names
+            traj_reverie_obj_names
         )
         
         # gmap embeds
@@ -753,26 +642,18 @@ class GlocalTextPathCMT(BertPreTrainedModel):
         traj_step_lens, traj_vp_view_lens, traj_vp_obj_lens, traj_vpids, traj_cand_vpids,
         gmap_lens, gmap_step_ids, gmap_pos_fts, gmap_pair_dists, gmap_vpids, vp_pos_fts,
         return_gmap_embeds=True,         
-        z_img_features=None, z_img_pzs=None, traj_reverie_loc_fts=None, return_txt_embeds=False,
-        traj_reverie_obj_names=None,
-        instr_z_landmark_features=None, instr_z_landmark_pzs=None,
-        instr_z_direction_features=None, instr_z_direction_pzs=None,
+        traj_reverie_loc_fts=None, return_txt_embeds=False,
+        traj_reverie_obj_names=None
     ):        
         # text embedding
         txt_token_type_ids = torch.zeros_like(txt_ids)
         txt_masks = gen_seq_masks(txt_lens)
-        if self.config.do_back_txt:
-            txt_embeds,act_embeds,obj_embeds,z_direc_embeds,z_landm_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids, instr_z_direction_features=instr_z_direction_features, instr_z_landmark_features=instr_z_landmark_features)
-            kdl_txt_embeds = txt_embeds.clone()
-            if self.role == 'student' and self.kd:
-                kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks, z_direc_embeds=z_direc_embeds, z_direc_pzs=instr_z_direction_pzs, z_landm_embeds=z_landm_embeds, z_landm_pzs=instr_z_landmark_pzs)
-        else:
-            txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
-            kdl_txt_embeds = txt_embeds.clone()
-            if self.role == 'student' and self.kd:
-                kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
-            txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
+
+        txt_embeds = self.embeddings(txt_ids, token_type_ids=txt_token_type_ids)[0]
+        kdl_txt_embeds = txt_embeds.clone()
+        if self.role == 'student' and self.kd:
+            kdl_txt_embeds = self.txt_emb_w(kdl_txt_embeds)
+        txt_embeds, txt_attns = self.lang_encoder(txt_embeds, txt_masks)
         extended_txt_masks = extend_neg_masks(txt_masks)
         
         # trajectory embedding
@@ -781,7 +662,7 @@ class GlocalTextPathCMT(BertPreTrainedModel):
             traj_view_img_fts, traj_loc_fts, traj_nav_types, 
             traj_step_lens, traj_vp_view_lens, self.embeddings.token_type_embeddings,
             traj_obj_img_fts, traj_vp_obj_lens, traj_reverie_loc_fts,
-            z_img_features, z_img_pzs, traj_reverie_obj_names
+            traj_reverie_obj_names
         )
         
         # gmap embeds

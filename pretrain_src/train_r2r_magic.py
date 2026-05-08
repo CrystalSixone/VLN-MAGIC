@@ -29,8 +29,8 @@ from optim.misc import build_optimizer
 from parser import load_parser, parse_with_config, postprocess_args
 
 from data.loader import MetaLoader, PrefetchLoader, build_dataloader
-from pretrain_src.data.dataset import R2RTextPathData, LoadZdict
-from pretrain_src.data.dataset import read_img_features_from_h5py, read_img_features_from_h5py_multiprocess
+from data.dataset import R2RTextPathData
+from data.dataset import read_img_features_from_h5py, read_img_features_from_h5py_multiprocess
 from data.tasks import (
     MlmDataset, mlm_collate,
     MrcDataset, mrc_collate,
@@ -213,7 +213,7 @@ def main(opts):
     student_checkpoint = {}
     if opts.student_checkpoint:
         student_checkpoint = torch.load(opts.student_checkpoint, map_location=lambda storage, loc: storage)
-    elif len(opts.student_checkpoint)==0:
+    elif opts.student_checkpoint == 'None':
         student_checkpoint = {}
         if opts.init_pretrained == 'bert':
             tmp = AutoModel.from_pretrained(model_config.lang_bert_name)
@@ -287,18 +287,6 @@ def main(opts):
     aug_img_db = read_img_features_from_h5py_multiprocess(data_cfg.aug_img_file, model_config.image_feat_size, num_processes=opts.n_process)
 
     LOGGER.info(f'   Load image files done.')
-
-    # Intervention
-    z_dicts = None
-    if model_config.do_back_img or model_config.do_back_txt:
-        ZdictReader = LoadZdict(data_cfg.img_zdict_file,data_cfg.instr_zdict_file)
-        z_dicts = defaultdict(lambda:None)
-        if model_config.do_back_img:
-            img_zdict = ZdictReader.load_img_tensor()
-            z_dicts['img_zdict'] = img_zdict
-        if model_config.do_back_txt:
-            instr_zdict = ZdictReader.load_instr_tensor()
-            z_dicts['instr_zdict'] = instr_zdict
     
     LOGGER.info(f'  Loading training datasets ...')
     # load data training set
@@ -312,8 +300,6 @@ def main(opts):
         cat_file=data_cfg.cat_file,
         args=model_config, tok=tokenizer,
         aug_img_db=aug_img_db,
-        z_dicts=z_dicts,
-        n_process=opts.n_process
     )
     LOGGER.info(f'  Loading training datasets done.')
     val_nav_db = R2RTextPathData(
@@ -325,9 +311,7 @@ def main(opts):
         max_txt_len=opts.max_txt_len, in_memory=True,
         cat_file=data_cfg.cat_file,
         args=model_config, tok=tokenizer,
-        aug_img_db=aug_img_db,
-        z_dicts=z_dicts,
-        n_process=opts.n_process
+        aug_img_db=aug_img_db
     )
     LOGGER.info(f'  Loading val_seen datasets done.')
     val2_nav_db = R2RTextPathData(
@@ -340,8 +324,6 @@ def main(opts):
         cat_file=data_cfg.cat_file,
         args=model_config, tok=tokenizer,
         aug_img_db=aug_img_db,
-        z_dicts=z_dicts,
-        n_process=opts.n_process
     )
     LOGGER.info(f'  Loading val_unseen datasets done.')
 

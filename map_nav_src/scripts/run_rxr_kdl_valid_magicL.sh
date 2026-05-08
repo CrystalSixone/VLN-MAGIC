@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_b_valid
+name=20260508_rxr_magic_l_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -11,11 +11,11 @@ seed=0
 
 outdir=${DATA_ROOT}/RxR/
 
-student_model_type=magic_s
-teacher_model_type=magic_m
-student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/ckpts/best_val_unseen.pt
-student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/backdoor/backdoor_update_features.tsv
-student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_S/logs/frontdoor/frontdoor_update_features.tsv
+student_model_type=magic_l
+
+student_resume_file=${DATA_ROOT}/RxR/navigator/MAGIC_L/ckpts/best_val_unseen.pt
+student_backdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_L/logs/backdoor/backdoor_update_features.tsv
+student_frontdoor_file=${DATA_ROOT}/RxR/navigator/MAGIC_L/logs/frontdoor/frontdoor_update_features.tsv
 
 flag="--root_dir ${DATA_ROOT}
       --dataset rxr
@@ -66,16 +66,13 @@ flag="--root_dir ${DATA_ROOT}
       --do_front_his
       --front_n_clusters 24
 
-      --train_kdl
-
       --student_model_type ${student_model_type}
-      --teacher_model_type ${teacher_model_type}
-      
+
       --student_resume_file ${student_resume_file}
       --s_frontdoor_dict_file ${student_frontdoor_file}
       --s_backdoor_dict_file ${student_backdoor_file}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='5' python r2r/main_nav.py $flag \
       --submit

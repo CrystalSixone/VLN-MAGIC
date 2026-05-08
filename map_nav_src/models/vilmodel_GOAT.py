@@ -1,4 +1,3 @@
-# GOAT
 import json
 import logging
 import math
@@ -22,10 +21,6 @@ from .ops import extend_neg_masks, gen_seq_masks, pad_tensors_wgrad
 from .model import convert_attn
 from typing import Optional
 
-from transformers.modeling_utils import (
-    PreTrainedModel,
-    apply_chunking_to_forward,
-)
 logger = logging.getLogger(__name__)
 
 

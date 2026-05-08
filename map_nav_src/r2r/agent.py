@@ -1,6 +1,5 @@
 import json
 import os
-# os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 import sys
 import numpy as np
@@ -547,7 +546,7 @@ class GMapNavAgent(Seq2SeqAgent):
         ''' compute the knowledge distillation losses (This is always project the small student to large dimension)
         :param s_outputs: the outputs from the student model.
         :param t_outputs: the outputs from the teacher model.
-        :role: t2s (real student to real teacher); s2t (reverse. Let student supervise teacher).
+        :role: t2s (real student to real teacher); s2t (reverse. Let student supervises teacher).
         '''
         if role == 't2s':
             s_model = self.vln_bert.vln_bert
@@ -562,168 +561,140 @@ class GMapNavAgent(Seq2SeqAgent):
         if t == 0:
             kdl_txt_emb_loss, kdl_txt_attn_loss = 0, 0
             # only compute txt's KD loss for once.
-            if 'txt' in self.args.kd_ability_types:
-                s_txt_embeds = s_outputs['txt_embeds'].clone()
-                if role == 't2s':
-                    s_txt_embeds = s_model.txt_emb_w(s_txt_embeds)
-                    t_txt_embeds = t_outputs['txt_embeds'].detach()
-                elif role == 's2t':
-                    t_txt_embeds = t_model.txt_emb_w(t_outputs['txt_embeds']).detach()
-                
-                if not self.args.train_kdl_noFeat:
-                    kdl_txt_emb_loss = self.kdl_feat_loss(s_txt_embeds, t_txt_embeds, 
-                                                            temperature=self.args.kdl_temperature,
-                                                            t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-                if not self.args.train_kdl_noAttn:
-                    kdl_txt_attn_loss = self.kdl_attn_loss(s_outputs['txt_attns'][:,:min_len,:,:], t_outputs['txt_attns'][:,:min_len,:,:].detach(), 
-                                                            temperature=self.args.kdl_temperature, 
-                                                            t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-                if self.args.kdl_adaptive_ability_weight:
-                    if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
-                        kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss * F.softplus(s_model.kdl_txt_weight)
-                        kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss * F.softplus(s_model.kdl_txt_weight)
-                    elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
-                        kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss * softmax_weights[0]
-                        kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss * softmax_weights[0]
+            s_txt_embeds = s_outputs['txt_embeds'].clone()
+            if role == 't2s':
+                s_txt_embeds = s_model.txt_emb_w(s_txt_embeds)
+                t_txt_embeds = t_outputs['txt_embeds'].detach()
+            elif role == 's2t':
+                t_txt_embeds = t_model.txt_emb_w(t_outputs['txt_embeds']).detach()
+            
+            kdl_txt_emb_loss = self.kdl_feat_loss(s_txt_embeds, t_txt_embeds, 
+                                                    temperature=self.args.kdl_temperature,
+                                                    t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+            kdl_txt_attn_loss = self.kdl_attn_loss(s_outputs['txt_attns'][:,:min_len,:,:], t_outputs['txt_attns'][:,:min_len,:,:].detach(), 
+                                                    temperature=self.args.kdl_temperature, 
+                                                    t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+            if self.args.kdl_adaptive_ability_weight:
+                if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
+                    kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss * F.softplus(s_model.kdl_txt_weight)
+                    kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss * F.softplus(s_model.kdl_txt_weight)
+                elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
+                    kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss * softmax_weights[0]
+                    kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss * softmax_weights[0]
 
-                else:  
-                    kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss
-                    kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss
+            else:  
+                kdl_loss['txt_emb_loss'] = kdl_txt_emb_loss
+                kdl_loss['txt_attn_loss'] = kdl_txt_attn_loss
         
         # 2. Img
-        if 'img' in self.args.kd_ability_types:
-            s_pano_embeds = s_outputs['pano_embeds'].clone()
-            s_pano_fused_embeds = s_outputs['pano_fused_embeds'].clone()
-            if role == 't2s':
-                s_pano_embeds = s_model.kdl_img_w(s_pano_embeds)
-                s_pano_fused_embeds = s_model.kdl_avg_img_w(s_pano_fused_embeds)
-                t_pano_embeds = t_outputs['pano_embeds'].detach()
-                t_pano_fused_embeds = t_outputs['pano_fused_embeds'].detach()
-            elif role == 's2t':
-                t_pano_embeds = t_model.kdl_img_w(t_outputs['pano_embeds']).detach()
-                t_pano_fused_embeds = t_model.kdl_avg_img_w(t_outputs['pano_fused_embeds']).detach()
-            
-            img_emb_loss, img_attn_loss, avg_img_emb_loss = 0, 0, 0
-            if not self.args.train_kdl_noFeat:
-                img_emb_loss = self.kdl_feat_loss(s_pano_embeds, t_pano_embeds, temperature=self.args.kdl_temperature,
-                                                    t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-                avg_img_emb_loss = self.kdl_feat_loss(s_pano_fused_embeds, t_pano_fused_embeds, temperature=self.args.kdl_temperature,
-                                                        t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-            if self.args.kdl_adaptive_ability_weight:
-                if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
-                    kdl_loss['img_emb_loss'] += img_emb_loss * F.softplus(s_model.kdl_img_weight) / 2
-                    kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss * F.softplus(s_model.kdl_img_weight) / 2
-                elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
-                    kdl_loss['img_emb_loss'] += img_emb_loss * softmax_weights[1]
-                    kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss * softmax_weights[1]
-            else:
-                kdl_loss['img_emb_loss'] += img_emb_loss/2
-                kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss/2
+        s_pano_embeds = s_outputs['pano_embeds'].clone()
+        s_pano_fused_embeds = s_outputs['pano_fused_embeds'].clone()
+        if role == 't2s':
+            s_pano_embeds = s_model.kdl_img_w(s_pano_embeds)
+            s_pano_fused_embeds = s_model.kdl_avg_img_w(s_pano_fused_embeds)
+            t_pano_embeds = t_outputs['pano_embeds'].detach()
+            t_pano_fused_embeds = t_outputs['pano_fused_embeds'].detach()
+        elif role == 's2t':
+            t_pano_embeds = t_model.kdl_img_w(t_outputs['pano_embeds']).detach()
+            t_pano_fused_embeds = t_model.kdl_avg_img_w(t_outputs['pano_fused_embeds']).detach()
         
-            if not self.args.train_kdl_noAttn:
-                img_attn_loss = self.kdl_attn_loss(s_outputs['img_attns'], t_outputs['img_attns'].detach(), 
-                                                   temperature=self.args.kdl_temperature,
-                                                    t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-            if self.args.kdl_adaptive_ability_weight:
-                if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
-                    kdl_loss['img_attn_loss'] += img_attn_loss * F.softplus(s_model.kdl_img_weight)
-                elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
-                    kdl_loss['img_attn_loss'] += img_attn_loss * softmax_weights[1]
-            else:
-                kdl_loss['img_attn_loss'] += img_attn_loss
+        img_emb_loss, img_attn_loss, avg_img_emb_loss = 0, 0, 0
+        img_emb_loss = self.kdl_feat_loss(s_pano_embeds, t_pano_embeds, temperature=self.args.kdl_temperature,
+                                            t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        avg_img_emb_loss = self.kdl_feat_loss(s_pano_fused_embeds, t_pano_fused_embeds, temperature=self.args.kdl_temperature,
+                                                t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        if self.args.kdl_adaptive_ability_weight:
+            if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
+                kdl_loss['img_emb_loss'] += img_emb_loss * F.softplus(s_model.kdl_img_weight) / 2
+                kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss * F.softplus(s_model.kdl_img_weight) / 2
+            elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
+                kdl_loss['img_emb_loss'] += img_emb_loss * softmax_weights[1]
+                kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss * softmax_weights[1]
+        else:
+            kdl_loss['img_emb_loss'] += img_emb_loss/2
+            kdl_loss['avg_img_emb_loss'] += avg_img_emb_loss/2
+    
+        img_attn_loss = self.kdl_attn_loss(s_outputs['img_attns'], t_outputs['img_attns'].detach(), 
+                                            temperature=self.args.kdl_temperature,
+                                            t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        if self.args.kdl_adaptive_ability_weight:
+            if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
+                kdl_loss['img_attn_loss'] += img_attn_loss * F.softplus(s_model.kdl_img_weight)
+            elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
+                kdl_loss['img_attn_loss'] += img_attn_loss * softmax_weights[1]
+        else:
+            kdl_loss['img_attn_loss'] += img_attn_loss
         
         # 3. Local & Global Cross-modal
-        if 'global' in self.args.kd_ability_types:
-            if role == 't2s':
-                s_global_emb = s_model.global_cross_w(s_outputs['nav_outs']['gmap_embeds'])
-                t_global_emb = t_outputs['nav_outs']['gmap_embeds'].detach()
-            elif role == 's2t':
-                s_global_emb = s_outputs['nav_outs']['gmap_embeds']
-                t_global_emb = t_model.global_cross_w(t_outputs['nav_outs']['gmap_embeds']).detach()
-            
-            global_emb_loss, global_attn_loss = 0, 0
-            if not self.args.train_kdl_noFeat:
-                global_emb_loss = self.kdl_feat_loss(s_global_emb, t_global_emb,t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-            if not self.args.train_kdl_noAttn:
-                global_attn_loss = self.kdl_attn_loss(s_outputs['nav_outs']['gmap_attns'][:,:min_len,:,:], t_outputs['nav_outs']['gmap_attns'][:,:min_len,:,:].detach(), 
-                                                      t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
+        ## global
+        if role == 't2s':
+            s_global_emb = s_model.global_cross_w(s_outputs['nav_outs']['gmap_embeds'])
+            t_global_emb = t_outputs['nav_outs']['gmap_embeds'].detach()
+        elif role == 's2t':
+            s_global_emb = s_outputs['nav_outs']['gmap_embeds']
+            t_global_emb = t_model.global_cross_w(t_outputs['nav_outs']['gmap_embeds']).detach()
         
-        if 'local' in self.args.kd_ability_types:
-            local_emb_loss, local_attn_loss = 0, 0
-            if role == 't2s':
-                s_local_emb = s_model.local_cross_w(s_outputs['nav_outs']['vp_embeds'])
-                t_local_emb = t_outputs['nav_outs']['vp_embeds'].detach()
-            elif role == 's2t':
-                s_local_emb = s_outputs['nav_outs']['vp_embeds']
-                t_local_emb = t_model.local_cross_w(t_outputs['nav_outs']['vp_embeds']).detach()
-                
-            if not self.args.train_kdl_noFeat:
-                local_emb_loss = self.kdl_feat_loss(s_local_emb, t_local_emb, t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
-            if not self.args.train_kdl_noAttn:
-                local_attn_loss = self.kdl_attn_loss(s_outputs['nav_outs']['vp_attns'][:,:min_len,:,:], t_outputs['nav_outs']['vp_attns'][:,:min_len,:,:].detach(),
-                                                     t_sample_weights=t_outputs['sample_weights'],
-                                                            loss_type=loss_type)
+        global_emb_loss, global_attn_loss = 0, 0
+        global_emb_loss = self.kdl_feat_loss(s_global_emb, t_global_emb,t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        global_attn_loss = self.kdl_attn_loss(s_outputs['nav_outs']['gmap_attns'][:,:min_len,:,:], t_outputs['nav_outs']['gmap_attns'][:,:min_len,:,:].detach(), 
+                                                t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        
+        ## local
+        local_emb_loss, local_attn_loss = 0, 0
+        if role == 't2s':
+            s_local_emb = s_model.local_cross_w(s_outputs['nav_outs']['vp_embeds'])
+            t_local_emb = t_outputs['nav_outs']['vp_embeds'].detach()
+        elif role == 's2t':
+            s_local_emb = s_outputs['nav_outs']['vp_embeds']
+            t_local_emb = t_model.local_cross_w(t_outputs['nav_outs']['vp_embeds']).detach()
+            
+        local_emb_loss = self.kdl_feat_loss(s_local_emb, t_local_emb, t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
+        local_attn_loss = self.kdl_attn_loss(s_outputs['nav_outs']['vp_attns'][:,:min_len,:,:], t_outputs['nav_outs']['vp_attns'][:,:min_len,:,:].detach(),
+                                                t_sample_weights=t_outputs['sample_weights'],
+                                                    loss_type=loss_type)
 
         if self.args.kdl_adaptive_ability_weight:
             if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
-                if 'global' in self.args.kd_ability_types:
-                    kdl_loss['global_emb_loss'] += global_emb_loss * F.softplus(s_model.kdl_global_weight)
-                    kdl_loss['global_attn_loss'] += global_attn_loss * F.softplus(s_model.kdl_global_weight)
-                if 'local' in self.args.kd_ability_types:
-                    kdl_loss['local_emb_loss'] += local_emb_loss * F.softplus(s_model.kdl_local_weight)
-                    kdl_loss['local_attn_loss'] += local_attn_loss * F.softplus(s_model.kdl_local_weight)
+                kdl_loss['global_emb_loss'] += global_emb_loss * F.softplus(s_model.kdl_global_weight)
+                kdl_loss['global_attn_loss'] += global_attn_loss * F.softplus(s_model.kdl_global_weight)
+                kdl_loss['local_emb_loss'] += local_emb_loss * F.softplus(s_model.kdl_local_weight)
+                kdl_loss['local_attn_loss'] += local_attn_loss * F.softplus(s_model.kdl_local_weight)
             elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
-                if 'global' in self.args.kd_ability_types:
-                    kdl_loss['global_emb_loss'] += global_emb_loss * softmax_weights[2]
-                    kdl_loss['global_attn_loss'] += global_attn_loss * softmax_weights[2]
-                if 'local' in self.args.kd_ability_types:
-                    kdl_loss['local_emb_loss'] += local_emb_loss * softmax_weights[3]
-                    kdl_loss['local_attn_loss'] += local_attn_loss * softmax_weights[3]
+                kdl_loss['global_emb_loss'] += global_emb_loss * softmax_weights[2]
+                kdl_loss['global_attn_loss'] += global_attn_loss * softmax_weights[2]
+                kdl_loss['local_emb_loss'] += local_emb_loss * softmax_weights[3]
+                kdl_loss['local_attn_loss'] += local_attn_loss * softmax_weights[3]
         else:
-            if 'global' in self.args.kd_ability_types:
-                kdl_loss['global_emb_loss'] += global_emb_loss
-                kdl_loss['global_attn_loss'] += global_attn_loss
-            if 'local' in self.args.kd_ability_types:
-                kdl_loss['local_emb_loss'] += local_emb_loss
-                kdl_loss['local_attn_loss'] += local_attn_loss
+            kdl_loss['global_emb_loss'] += global_emb_loss
+            kdl_loss['global_attn_loss'] += global_attn_loss
+            kdl_loss['local_emb_loss'] += local_emb_loss
+            kdl_loss['local_attn_loss'] += local_attn_loss
         
         # 4. Predict
-        if 'action' in self.args.kd_ability_types:
-            predict_loss = 0
-            if not self.args.train_kdl_noLogit and nav_targets is not None:
-                if self.args.kdl_logit_loss == 'dkd':
-                    nav_targets = torch.where(nav_targets == self.args.ignoreid, torch.zeros_like(nav_targets), nav_targets)
-                predict_loss = self.kdl_logit_loss(s_outputs['nav_logits'], t_outputs['nav_logits'].detach(), 
-                        target=nav_targets,
-                        temperature=self.args.kdl_temperature, 
-                        alpha=self.args.kdl_dkd_alpha, 
-                        beta=self.args.kdl_dkd_beta,
-                        t_sample_weights=t_outputs['sample_weights'],
-                        loss_type=loss_type)
-            if self.args.kdl_adaptive_ability_weight:
-                if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
-                    kdl_loss['predict_loss'] += predict_loss * F.softplus(s_model.kdl_predict_weight)
-                elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
-                    kdl_loss['predict_loss'] += predict_loss * softmax_weights[4]
-            else:
-                kdl_loss['predict_loss'] += predict_loss
+        ## action
+        predict_loss = 0
+        if self.args.kdl_adaptive_ability_weight:
+            if self.args.kdl_adaptive_ability_weight_type == 'learned_weight':
+                kdl_loss['predict_loss'] += predict_loss * F.softplus(s_model.kdl_predict_weight)
+            elif self.args.kdl_adaptive_ability_weight_type in ['RW', 'grad']:
+                kdl_loss['predict_loss'] += predict_loss * softmax_weights[4]
+        else:
+            kdl_loss['predict_loss'] += predict_loss
         
         return kdl_loss
 
     # @profile
     def rollout(self, train_ml=None, train_rl=False, reset=True, speaker=None,
     test=False, z_dicts={}, z_front_dict={}, t_z_dicts={}, t_z_front_dict={},
-    test_teacher=False, current_iter_grads=None, t_current_iter_grads=None, ensemble_n=1):
-        if self.args.empty_cache:
-            torch.cuda.empty_cache()
+    test_teacher=False, current_iter_grads=None, t_current_iter_grads=None):
         if reset:  # Reset env
             obs = self.env.reset()
         else:
