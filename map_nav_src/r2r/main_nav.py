@@ -182,7 +182,7 @@ t_front_feat_loader=None,t_z_dicts=None):
                 "\nLOAD the student model from {}, iteration {}".format(args.student_resume_file, start_iter),
                 record_file
             )
-        if args.train_kdl_teacher or args.sim_env == 'tjark':
+        if args.train_kdl_teacher:
             start_iter = 0
     
     if args.train_kdl and args.teacher_resume_file is not None:
@@ -200,13 +200,13 @@ t_front_feat_loader=None,t_z_dicts=None):
         if len(args.frontdoor_dict_file) > 0:
             z_front_dict = front_feat_loader.read_tim_tsv(args.frontdoor_dict_file, return_dict=True)
         else:
-            z_front_dict = front_feat_loader.random_pick_front_features(args, iter=0, save_file=False)
+            z_front_dict = front_feat_loader.random_pick_front_features()
 
         if args.train_kdl:
             if len(args.t_frontdoor_dict_file) > 0:
                 t_z_front_dict = t_front_feat_loader.read_tim_tsv(args.t_frontdoor_dict_file, return_dict=True)
             else:
-                t_z_front_dict = t_front_feat_loader.random_pick_front_features(args, iter=0, save_file=False)
+                t_z_front_dict = t_front_feat_loader.random_pick_front_features()
 
     
     if t_z_dicts is None:
@@ -296,9 +296,7 @@ t_front_feat_loader=None,t_z_dicts=None):
 
     best_val = {'val_unseen': {"spl": 0., "sr": 0., "state":"", "both": 0.}} 
     t_best_val = {'val_unseen': {"spl": 0., "sr": 0., "state":"", "both": 0.}}
-    if args.sim_env == 'tjark':
-        best_val = {'test': {"spl": 0., "sr": 0., "state":"", "both": 0.}} 
-        t_best_val = {'test': {"spl": 0., "sr": 0., "state":"", "both": 0.}}
+
     if args.dataset == 'rxr':
         best_val = {'val_unseen': {"nDTW": 0., "SDTW": 0., "state":"", "both": 0.}}
         t_best_val = {'val_unseen': {"nDTW": 0., "SDTW": 0., "state":"", "both": 0.}}
@@ -429,16 +427,13 @@ t_front_feat_loader=None,t_z_dicts=None):
         # Run validation
         loss_str = "iter {}".format(iter)
         t_loss_str = "iter {}".format(iter)
-
-        if args.empty_cache:
-            torch.cuda.empty_cache()
                         
         if args.z_instr_update and iter%(args.update_iter)==0:
             is_update = True
             if args.do_back_txt:
                 z_dicts, landmark_dict, direction_dict, landmark_pz_dict, direction_pz_dict = listner.update_z_dict(train_instr_data,iter,z_dicts,front_dict=None,save_file=False,add_back_feat=True)
             if args.do_front_img or args.do_front_his or args.do_front_txt:
-                z_front_dict = front_feat_loader.random_pick_front_features(args, iter, save_file=False)
+                z_front_dict = front_feat_loader.random_pick_front_features()
         
         if args.train_kdl and args.kdl_adaptive_ability_weight and args.kdl_adaptive_ability_weight_type == 'grad' and iter%(args.aw_update_iter)==0:
             for k,v in acc_grads.items():
@@ -488,7 +483,7 @@ t_front_feat_loader=None,t_z_dicts=None):
                                 z_dicts, landmark_dict, direction_dict, landmark_pz_dict, direction_pz_dict = listner.update_z_dict(train_instr_data,iter, z_dicts, front_dict=None,save_file=False,add_back_feat=True)
                             if args.do_front_img or args.do_front_his or args.do_front_txt:
                                 front_feat_loader.save_features(args, z_front_dict)
-                                z_front_dict = front_feat_loader.random_pick_front_features(args, iter, save_file=False)
+                                z_front_dict = front_feat_loader.random_pick_front_features()
             
             write_to_record_file("Finish valid %s in %s." %(env_name, timeSince(start_time, float(iter)/args.iters)), record_file)
             # test the teacher model
@@ -528,7 +523,7 @@ t_front_feat_loader=None,t_z_dicts=None):
                                     t_z_dicts, t_landmark_dict, t_direction_dict, t_landmark_pz_dict, t_direction_pz_dict = listner.update_z_dict(train_instr_data, iter, t_z_dicts, front_dict=None, save_file=False, role='teacher',add_back_feat=True)
                                 if args.do_front_img or args.do_front_his or args.do_front_txt:
                                     t_front_feat_loader.save_features(args, t_z_front_dict, role='teacher')
-                                    t_z_front_dict = t_front_feat_loader.random_pick_front_features(args, iter, save_file=False)
+                                    t_z_front_dict = t_front_feat_loader.random_pick_front_features()
 
                 write_to_record_file("Finish valid %s in %s." %(env_name, timeSince(start_time, float(iter)/args.iters)), record_file)
                 
@@ -584,7 +579,7 @@ def valid(args, train_env, val_envs, rank=-1, z_dicts=None, front_feat_loader=No
         if len(args.s_frontdoor_dict_file) > 0:
             z_front_dict =  front_feat_loader.read_tim_tsv(args.s_frontdoor_dict_file, return_dict=True)
         else:
-            z_front_dict = front_feat_loader.random_pick_front_features(args, iter=0, save_file=False)
+            z_front_dict = front_feat_loader.random_pick_front_features()
     else:
         z_front_dict = None
 
@@ -628,7 +623,7 @@ def valid(args, train_env, val_envs, rank=-1, z_dicts=None, front_feat_loader=No
             if len(args.t_frontdoor_dict_file) > 0:
                 t_z_front_dict = t_front_feat_loader.read_tim_tsv(args.t_frontdoor_dict_file, return_dict=True)
             else:
-                t_z_front_dict = t_front_feat_loader.random_pick_front_features(args, iter=0, save_file=False)
+                t_z_front_dict = t_front_feat_loader.random_pick_front_features()
                 t_front_feat_loader.save_features(args, t_z_front_dict, role='teacher')
         else:
             t_z_front_dict = None

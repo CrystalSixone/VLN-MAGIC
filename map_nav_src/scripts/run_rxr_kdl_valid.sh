@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_b_valid
+name=rxr_magic_b_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger

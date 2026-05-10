@@ -22,3 +22,5 @@ __pycache__/
 /datasets_tjark
 /preprocess/3D/matterport3d_mesh
 /preprocess/3D/*.json
+
+/temp

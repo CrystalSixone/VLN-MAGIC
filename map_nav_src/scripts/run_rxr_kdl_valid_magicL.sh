@@ -1,4 +1,4 @@
-name=20260508_rxr_magic_l_valid
+name=rxr_magic_l_valid
 DATA_ROOT=../datasets
 
 train_alg=dagger
@@ -74,5 +74,5 @@ flag="--root_dir ${DATA_ROOT}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='5' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
       --submit

@@ -87,5 +87,5 @@ flag="--root_dir ${DATA_ROOT}
       "
 
 # valid
-CUDA_VISIBLE_DEVICES='3' python r2r/main_nav.py $flag \
+CUDA_VISIBLE_DEVICES='0' python r2r/main_nav.py $flag \
       --submit

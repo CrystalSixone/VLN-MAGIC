@@ -198,6 +198,8 @@ def parse_args():
     parser.add_argument("--name",type=str,default='debug')
     parser.add_argument("--for_debug",action='store_true',default=False) 
     parser.add_argument("--use_lr_sch",action='store_true',default=False)
+    parser.add_argument("--use_warm_up",action='store_true',default=False)
+    parser.add_argument("--warmup_iters",type=int,default=2000)
     parser.add_argument("--lr_sch",type=str,default='polynomial') 
 
     args, _ = parser.parse_known_args()

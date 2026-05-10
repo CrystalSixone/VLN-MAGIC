@@ -599,17 +599,6 @@ class Trainer(object):
                     logging_outputs, sample_size, grad_norm,
                 )
 
-                # clear CUDA cache to reduce memory fragmentation
-                if (
-                    self.cuda
-                    and self.args.empty_cache_freq > 0
-                    and (
-                        (self.get_num_updates() + self.args.empty_cache_freq - 1)
-                        % self.args.empty_cache_freq
-                    ) == 0
-                ):
-                    torch.cuda.empty_cache()
-
         if self.args.fp16:
             metrics.log_scalar("loss_scale", self.optimizer.scaler.loss_scale, priority=700, round=0)
 

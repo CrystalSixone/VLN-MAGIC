@@ -16,13 +16,13 @@ speaker_envedit_file=${DATA_ROOT}/R2R/speaker/transpeaker_r2r/state_dict/best_bo
 
 augdir=${DATA_ROOT}/R2R/annotations/prevalent_aug_train_enc.json
 
-teacher_file=${DATA_ROOT}/R2R/navigator/GOAT/ckpts/best_val_unseen
-teacher_backdoor_file=${DATA_ROOT}/R2R/navigator/GOAT/logs/backdoor/update_instr_z_dict.tsv
-teacher_frontdoor_file=${DATA_ROOT}/R2R/navigator/GOAT/logs/frontdoor/z_front_feature.tsv
+teacher_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/ckpts/best_val_unseen.pt
+teacher_backdoor_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/logs/backdoor/backdoor_update_features.tsv
+teacher_frontdoor_file=${DATA_ROOT}/R2R/navigator/MAGIC_L/logs/frontdoor/frontdoor_update_features.tsv
 
-student_B_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_B/ckpts/best_val_unseen
-student_M_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_M/ckpts/best_val_unseen
-student_S_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_S/ckpts/best_val_unseen
+student_B_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_B/ckpts/best_val_unseen.pt
+student_M_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_M/ckpts/best_val_unseen.pt
+student_S_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_S/ckpts/best_val_unseen.pt
 
 flag="--root_dir ${DATA_ROOT}
       --dataset r2r
@@ -94,17 +94,8 @@ flag="--root_dir ${DATA_ROOT}
       --t_frontdoor_dict_file ${teacher_frontdoor_file}
       --backdoor_dict_file ${teacher_backdoor_file}
 
-      --teacher_hidden_size 768
-      --teacher_num_l_layers 6
-      --teacher_num_pano_layers 2
-      --teacher_num_x_layers 3
-      --teacher_mlp_ratio 4
-
-      --student_num_l_layers 6
-      --student_num_x_layers 3
-      --student_num_pano_layers 2
-      --student_hidden_size 384
-      --student_mlp_ratio 4
+      --teacher_model_type ${teacher_model_type}
+      --student_model_type ${student_model_type}
 
       --kdl_adaptive_ability_weight
       --kdl_adaptive_ability_weight_type RW
