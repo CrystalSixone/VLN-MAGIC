@@ -24,6 +24,10 @@ student_B_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_B/ckpts/best_val_unseen.p
 student_M_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_M/ckpts/best_val_unseen.pt
 student_S_resume_file=${DATA_ROOT}/R2R/navigator/MAGIC_S/ckpts/best_val_unseen.pt
 
+# Model Type
+teacher_model_type=magic_l
+student_model_type=magic_b
+
 flag="--root_dir ${DATA_ROOT}
       --dataset r2r
       --output_dir ${outdir}
